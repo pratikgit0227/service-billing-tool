@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Service Billing Tool</title>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1c2230;--mut:#6b7385;--line:#e3e6ec;--pri:#1f4fd8;--priInk:#fff;
+--ok:#16794a;--okBg:#e3f5ec;--warn:#9a6200;--warnBg:#fff3d6;--bad:#b3261e;--badBg:#fde7e5;--info:#34507a;--infoBg:#e8eef8}
+@media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b2029;--ink:#e8ebf1;--mut:#97a0b3;--line:#2b3240;--pri:#6b8cff;--priInk:#0c1020;
+--ok:#5fd39b;--okBg:#173326;--warn:#f0b955;--warnBg:#3a2d10;--bad:#ff8a80;--badBg:#3b1917;--info:#9db8e8;--infoBg:#1d2a40}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header h1{font-size:16px;margin:0 12px 0 0}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:none;border:0;padding:7px 14px;border-radius:8px;color:var(--mut);cursor:pointer;font:inherit;font-weight:600}
+nav button.on{background:var(--infoBg);color:var(--pri)}
+.sp{flex:1}
+main{padding:16px 20px;max-width:1400px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.grid{display:grid;gap:12px}
+.kpis{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px}
+.kpi .l{color:var(--mut);font-size:12px}
+.kpi .v{font-size:22px;font-weight:700;margin-top:2px}
+.kpi.bad .v{color:var(--bad)}.kpi.ok .v{color:var(--ok)}.kpi.warn .v{color:var(--warn)}
+.two{grid-template-columns:repeat(auto-fit,minmax(380px,1fr))}
+h2{font-size:14px;margin:0 0 10px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 8px;border-bottom:1px solid var(--line);vertical-align:top;white-space:nowrap}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+td.n,th.n{text-align:right}
+td.w{white-space:normal;min-width:150px}
+tr.click{cursor:pointer}tr.click:hover{background:var(--bg)}
+.tw{overflow-x:auto}
+.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.b-Paid{background:var(--okBg);color:var(--ok)}
+.b-Partial{background:var(--warnBg);color:var(--warn)}
+.b-Pending{background:var(--infoBg);color:var(--info)}
+.b-Overdue{background:var(--badBg);color:var(--bad)}
+button.btn{background:var(--pri);color:var(--priInk);border:0;border-radius:8px;padding:8px 14px;font:inherit;font-weight:600;cursor:pointer}
+button.btn.sec{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+button.btn.dng{background:var(--badBg);color:var(--bad)}
+button.btn.sm{padding:4px 10px;font-size:12px}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 9px;width:100%}
+label{display:block;font-size:12px;color:var(--mut);margin-bottom:3px}
+.f{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+.f .full{grid-column:1/-1}
+.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-bottom:14px;align-items:end}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);padding:0;width:min(780px,94vw);max-height:92vh}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+.dh{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--card)}
+.dh h3{margin:0;font-size:15px}
+.db{padding:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.mut{color:var(--mut)}.sm{font-size:12px}
+.hint{font-size:12px;color:var(--mut);margin-top:3px}
+.sum{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0}
+.sum div b{display:block;font-size:17px}
+.empty{color:var(--mut);padding:14px 4px}
+a.lnk{color:var(--pri);cursor:pointer;text-decoration:underline}
+</style>
+</head>
+<body>
+<header>
+  <h1>Service Billing Tool</h1>
+  <nav id="nav"></nav>
+  <span class="sp"></span>
+  <button class="btn sec sm" id="bExport">Backup (export)</button>
+  <button class="btn sec sm" id="bImport">Restore (import)</button>
+  <input type="file" id="fImport" accept="application/json" hidden>
+  <button class="btn" id="bNew">+ New Invoice</button>
+</header>
+<main id="main"></main>
+<dialog id="dlg"><div class="dh"><h3 id="dt"></h3><button class="btn sec sm" onclick="dlg.close()">Close</button></div><div class="db" id="dbody"></div></dialog>
+
+<script>
+/* ---------- config ---------- */
+const FYS=['2022-23','2023-24','2024-25','2025-26','2026-27','2027-28','2028-29'];
+const MODES=['UPI','Bank Transfer (NEFT/IMPS/RTGS)','Cash','Cheque','Card','Other'];
+const STATUSES=['Paid','Partial','Pending','Overdue'];
+const STATUS_LABEL={Paid:'Paid',Partial:'Partially Paid',Pending:'Pending',Overdue:'Overdue'};
+/* typeLabel: label of the sub-service field (priced via Pricing Master). extra: service-specific fields */
+const SERVICES={
+ 'ITR Filing':{typeLabel:'ITR Type',extra:[{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'GST Filing':{typeLabel:'Return Type',extra:[{k:'period',l:'Month / Return Period',kind:'month'},{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'GST Audit':{typeLabel:'Return Type',extra:[{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'Tax Planning':{typeLabel:'Service Type',extra:[{k:'fy',l:'Financial Year (if applicable)',kind:'fy'}]},
+ 'Tax Audit':{typeLabel:'Service Type',extra:[{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'Sale of Property':{typeLabel:'Service Type',extra:[{k:'property',l:'Property / Transaction Details',kind:'textarea',req:1},{k:'txnDate',l:'Transaction Date',kind:'date'}]},
+ 'Accounting':{typeLabel:'Accounting Service Type',extra:[{k:'period',l:'Month / Period',kind:'month'},{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'FSSAI':{typeLabel:'Service Type',extra:[{k:'licenseType',l:'License Type',kind:'select',opts:['','Basic Registration','State License','Central License']}]},
+ 'Udyam Registration':{typeLabel:'Service Type',extra:[]}
+};
+const SEED_PRICES=[['ITR Filing','ITR-1'],['ITR Filing','ITR-2'],['ITR Filing','ITR-3'],['ITR Filing','ITR-4'],['ITR Filing','ITR-5'],
+ ['GST Filing','GSTR-1'],['GST Filing','GSTR-3B'],['GST Filing','GSTR-9'],['GST Audit','GSTR-9C'],
+ ['Tax Planning','Tax Planning'],['Tax Audit','Tax Audit'],['Sale of Property','Property Sale Advisory'],
+ ['Accounting','Monthly Bookkeeping'],['Accounting','Annual Accounts Finalisation'],['FSSAI','Food License'],['Udyam Registration','Udyam Registration']];
+
+/* ---------- storage (IndexedDB, holds data + proofs) ---------- */
+let S={clients:[],pricing:[],invoices:[],seq:1};
+const idb=()=>new Promise((res,rej)=>{const r=indexedDB.open('billing-tool',1);r.onupgradeneeded=()=>r.result.createObjectStore('kv');r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
+async function load(){try{const db=await idb();const v=await new Promise(r=>{const q=db.transaction('kv').objectStore('kv').get('state');q.onsuccess=()=>r(q.result);q.onerror=()=>r(null)});if(v)S=v}catch(e){console.warn(e)}
+ if(!S.pricing.length){S.pricing=SEED_PRICES.map(([service,type])=>({id:uid(),service,type,price:0}));save()}}
+async function save(){try{const db=await idb();db.transaction('kv','readwrite').objectStore('kv').put(S,'state')}catch(e){alert('Could not save: '+e)}}
+
+/* ---------- helpers ---------- */
+const $=s=>document.querySelector(s), dlg=$('#dlg');
+const uid=()=>Math.random().toString(36).slice(2,10);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const inr=n=>'₹'+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
+const pad=n=>String(n).padStart(2,'0');
+const iso=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const TODAY=()=>iso(new Date());
+const dnum=s=>{const[y,m,d]=s.split('-').map(Number);return Date.UTC(y,m-1,d)/864e5};
+const addDays=(s,n)=>{const d=new Date(dnum(s)*864e5+n*864e5);return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`};
+const fmtD=s=>{if(!s)return'—';const[y,m,d]=s.split('-');return `${d} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]} ${y}`};
+const fmtM=s=>{if(!s)return'';const[y,m]=s.split('-');return `${['January','February','March','April','May','June','July','August','September','October','November','December'][m-1]} ${y}`};
+const fyOf=s=>{const[y,m]=s.split('-').map(Number);const a=m>=4?y:y-1;return `${a}-${String(a+1).slice(2)}`};
+const fyFromMonth=s=>s?fyOf(s+'-01'):'';
+
+const received=i=>i.payments.reduce((a,p)=>a+Number(p.amount),0);
+const remaining=i=>Math.max(0,Number(i.amount)-received(i));
+const overdueDays=i=>remaining(i)>0&&i.dueDate&&i.dueDate<TODAY()?dnum(TODAY())-dnum(i.dueDate):0;
+function status(i){if(remaining(i)<=0)return'Paid';if(overdueDays(i)>0)return'Overdue';return received(i)>0?'Partial':'Pending'}
+const invFY=i=>i.details.fy||fyOf(i.invoiceDate);
+const client=id=>S.clients.find(c=>c.id===id)||{name:'(deleted)'};
+const typesFor=svc=>S.pricing.filter(p=>p.service===svc).map(p=>p.type);
+const priceFor=(svc,type)=>(S.pricing.find(p=>p.service===svc&&p.type===type)||{}).price;
+function detailText(i){const d=i.details,out=[];if(d.period)out.push(fmtM(d.period));if(d.fy)out.push('FY '+d.fy);if(d.licenseType)out.push(d.licenseType);if(d.property)out.push(d.property);if(d.txnDate)out.push('Txn '+fmtD(d.txnDate));return out.join(' · ')}
+const opts=(arr,sel,blank)=>(blank!==undefined?`<option value="">${esc(blank)}</option>`:'')+arr.map(o=>{const v=Array.isArray(o)?o[0]:o,l=Array.isArray(o)?o[1]:o;return `<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(l)}</option>`}).join('');
+
+/* ---------- filters ---------- */
+let F={client:'',service:'',fy:'',month:'',status:'',invFrom:'',invTo:'',dueFrom:'',dueTo:''};
+function filtered(){return S.invoices.filter(i=>{
+ if(F.client&&i.clientId!==F.client)return false;if(F.service&&i.service!==F.service)return false;
+ if(F.fy&&invFY(i)!==F.fy)return false;if(F.month&&!i.invoiceDate.startsWith(F.month))return false;
+ if(F.status&&status(i)!==F.status)return false;
+ if(F.invFrom&&i.invoiceDate<F.invFrom)return false;if(F.invTo&&i.invoiceDate>F.invTo)return false;
+ if(F.dueFrom&&i.dueDate<F.dueFrom)return false;if(F.dueTo&&i.dueDate>F.dueTo)return false;return true})}
+function filterBar(){return `<div class="card filters">
+ <div><label>Client</label><select data-f="client">${opts(S.clients.map(c=>[c.id,c.name]),F.client,'All')}</select></div>
+ <div><label>Service</label><select data-f="service">${opts(Object.keys(SERVICES),F.service,'All')}</select></div>
+ <div><label>Financial Year</label><select data-f="fy">${opts(FYS,F.fy,'All')}</select></div>
+ <div><label>Month (invoice)</label><input type="month" data-f="month" value="${F.month}"></div>
+ <div><label>Payment Status</label><select data-f="status">${opts(STATUSES.map(s=>[s,STATUS_LABEL[s]]),F.status,'All')}</select></div>
+ <div><label>Invoice date from</label><input type="date" data-f="invFrom" value="${F.invFrom}"></div>
+ <div><label>Invoice date to</label><input type="date" data-f="invTo" value="${F.invTo}"></div>
+ <div><label>Due date from</label><input type="date" data-f="dueFrom" value="${F.dueFrom}"></div>
+ <div><label>Due date to</label><input type="date" data-f="dueTo" value="${F.dueTo}"></div>
+ <div><button class="btn sec" id="fClear">Clear filters</button></div></div>`}
+function bindFilters(){document.querySelectorAll('[data-f]').forEach(e=>e.onchange=()=>{F[e.dataset.f]=e.value;render()});
+ const c=$('#fClear');if(c)c.onclick=()=>{Object.keys(F).forEach(k=>F[k]='');render()}}
+
+/* ---------- views ---------- */
+let TAB='dashboard';
+const TABS=[['dashboard','Dashboard'],['invoices','Invoices'],['clients','Clients'],['pricing','Pricing Master']];
+function render(){
+ $('#nav').innerHTML=TABS.map(([k,l])=>`<button class="${k===TAB?'on':''}" data-t="${k}">${l}</button>`).join('');
+ $('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{TAB=b.dataset.t;render()});
+ ({dashboard:vDash,invoices:vInv,clients:vClients,pricing:vPricing})[TAB]();
+}
+function invTable(list,{showActions=true}={}){
+ if(!list.length)return '<div class="empty">No invoices match.</div>';
+ return `<div class="tw"><table><thead><tr><th>Invoice</th><th>Client</th><th>Service</th><th>Inv. date</th><th class="n">Amount</th><th class="n">Received</th><th class="n">Due amt</th><th>Due date</th><th class="n">Overdue days</th><th>Status</th></tr></thead><tbody>`+
+ list.map(i=>{const st=status(i),od=overdueDays(i);return `<tr class="click" data-i="${i.id}"><td>${esc(i.no)}</td><td>${esc(client(i.clientId).name)}</td>
+ <td class="w"><b>${esc(i.service)}</b> · ${esc(i.type)}<div class="mut sm">${esc(detailText(i))}</div></td><td>${fmtD(i.invoiceDate)}</td>
+ <td class="n">${inr(i.amount)}</td><td class="n">${inr(received(i))}</td><td class="n">${inr(remaining(i))}</td><td>${fmtD(i.dueDate)}</td>
+ <td class="n">${od?`<b style="color:var(--bad)">${od}</b>`:'—'}</td><td><span class="badge b-${st}">${STATUS_LABEL[st]}</span></td></tr>`}).join('')+'</tbody></table></div>';
+}
+function bindRows(){document.querySelectorAll('tr[data-i]').forEach(r=>r.onclick=()=>openInvoice(r.dataset.i))}
+
+function vDash(){
+ const L=filtered(),T=TODAY(),wk=addDays(T,7);
+ const sum=f=>L.reduce((a,i)=>a+f(i),0);
+ const open=L.filter(i=>remaining(i)>0),od=open.filter(i=>overdueDays(i)>0),pend=open.filter(i=>overdueDays(i)===0);
+ const clientsN=Object.values(F).some(Boolean)?new Set(L.map(i=>i.clientId)).size:S.clients.length;
+ const dueToday=open.filter(i=>i.dueDate===T),dueWeek=open.filter(i=>i.dueDate>T&&i.dueDate<=wk);
+ const pays=L.flatMap(i=>i.payments.map(p=>({...p,i}))).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,8);
+ const k=(l,v,c='')=>`<div class="card kpi ${c}"><div class="l">${l}</div><div class="v">${v}</div></div>`;
+ $('#main').innerHTML=filterBar()+`<div class="grid kpis">
+ ${k('Total Clients',clientsN)}${k('Services Sold',L.length)}${k('Total Invoice Value',inr(sum(i=>+i.amount)))}
+ ${k('Payments Received',inr(sum(received)),'ok')}${k('Total Outstanding',inr(sum(remaining)),'warn')}
+ ${k('Total Overdue',inr(od.reduce((a,i)=>a+remaining(i),0)),'bad')}
+ ${k('Pending Payments (not yet due)',pend.length)}${k('Overdue Payments',od.length,'bad')}
+ ${k('Due Today',dueToday.length+' · '+inr(dueToday.reduce((a,i)=>a+remaining(i),0)))}
+ ${k('Due in next 7 days',dueWeek.length+' · '+inr(dueWeek.reduce((a,i)=>a+remaining(i),0)))}</div>
+ <div class="grid two">
+ <div class="card"><h2>Overdue payments</h2>${od.length?`<div class="tw"><table><thead><tr><th>Client</th><th>Invoice</th><th class="n">Due amt</th><th>Due date</th><th class="n">Days</th></tr></thead><tbody>`+od.sort((a,b)=>overdueDays(b)-overdueDays(a)).map(i=>`<tr class="click" data-i="${i.id}"><td>${esc(client(i.clientId).name)}</td><td>${esc(i.no)} · ${esc(i.type)}</td><td class="n">${inr(remaining(i))}</td><td>${fmtD(i.dueDate)}</td><td class="n"><b style="color:var(--bad)">${overdueDays(i)}</b></td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">Nothing overdue.</div>'}</div>
+ <div class="card"><h2>Due today / this week</h2>${(dueToday.length+dueWeek.length)?`<div class="tw"><table><thead><tr><th>Client</th><th>Invoice</th><th class="n">Due amt</th><th>Due date</th></tr></thead><tbody>`+[...dueToday,...dueWeek].map(i=>`<tr class="click" data-i="${i.id}"><td>${esc(client(i.clientId).name)}</td><td>${esc(i.no)} · ${esc(i.type)}</td><td class="n">${inr(remaining(i))}</td><td>${i.dueDate===T?'<b>Today</b>':fmtD(i.dueDate)}</td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">Nothing due in the next 7 days.</div>'}</div>
+ <div class="card" style="grid-column:1/-1"><h2>Recent payments</h2>${pays.length?`<div class="tw"><table><thead><tr><th>Date</th><th>Client</th><th>Invoice</th><th>Mode</th><th class="n">Amount</th><th>Proof</th></tr></thead><tbody>`+pays.map(p=>`<tr class="click" data-i="${p.i.id}"><td>${fmtD(p.date)}</td><td>${esc(client(p.i.clientId).name)}</td><td>${esc(p.i.no)} · ${esc(p.i.type)}</td><td>${esc(p.mode)}</td><td class="n">${inr(p.amount)}</td><td>${p.proof?'✔':'—'}</td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">No payments recorded yet.</div>'}</div>
+ </div>`;
+ bindFilters();bindRows();
+}
+function vInv(){
+ const L=filtered().sort((a,b)=>b.invoiceDate.localeCompare(a.invoiceDate)||b.no.localeCompare(a.no));
+ $('#main').innerHTML=filterBar()+`<div class="card"><h2>Invoices (${L.length}) — click a row to view, record payments or edit</h2>${invTable(L)}</div>`;
+ bindFilters();bindRows();
+}
+function vClients(){
+ const rows=S.clients.map(c=>{const L=S.invoices.filter(i=>i.clientId===c.id);const inv=L.reduce((a,i)=>a+ +i.amount,0),rec=L.reduce((a,i)=>a+received(i),0);
+  return `<tr><td><b>${esc(c.name)}</b><div class="mut sm">${esc(c.notes||'')}</div></td><td>${esc(c.phone||'')}<div class="mut sm">${esc(c.email||'')}</div></td><td class="n">${L.length}</td><td class="n">${inr(inv)}</td><td class="n">${inr(rec)}</td><td class="n"><b>${inr(inv-rec)}</b></td>
+  <td><button class="btn sec sm" data-ce="${c.id}">Edit</button> <button class="btn sec sm" data-cf="${c.id}">View invoices</button></td></tr>`}).join('');
+ $('#main').innerHTML=`<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Clients (${S.clients.length})</h2><button class="btn" id="cNew">+ Add client</button></div>
+ ${S.clients.length?`<div class="tw"><table><thead><tr><th>Client</th><th>Contact</th><th class="n">Services</th><th class="n">Invoiced</th><th class="n">Received</th><th class="n">Outstanding</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">No clients yet.</div>'}</div>`;
+ $('#cNew').onclick=()=>clientForm();
+ document.querySelectorAll('[data-ce]').forEach(b=>b.onclick=()=>clientForm(b.dataset.ce));
+ document.querySelectorAll('[data-cf]').forEach(b=>b.onclick=()=>{Object.keys(F).forEach(k=>F[k]='');F.client=b.dataset.cf;TAB='invoices';render()});
+}
+function vPricing(){
+ const groups=Object.keys(SERVICES).map(svc=>{const rows=S.pricing.filter(p=>p.service===svc);
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">${svc}</h2><button class="btn sec sm" data-add="${svc}">+ Add ${esc(SERVICES[svc].typeLabel.toLowerCase())}</button></div>
+  <table><tbody>${rows.map(p=>`<tr><td style="width:55%"><input data-pn="${p.id}" value="${esc(p.type)}"></td><td><input type="number" min="0" step="1" data-pp="${p.id}" value="${p.price}"></td><td><button class="btn dng sm" data-pd="${p.id}">✕</button></td></tr>`).join('')||'<tr><td class="mut">None yet.</td></tr>'}</tbody></table></div>`}).join('');
+ $('#main').innerHTML=`<p class="mut" style="margin-top:0">Prices (₹) set here are auto-picked when creating an invoice. They can be overridden per invoice. Add your own sub-services (e.g. extra Tax Planning types) with the + button.</p><div class="grid two">${groups}</div>`;
+ document.querySelectorAll('[data-pp]').forEach(e=>e.onchange=()=>{S.pricing.find(p=>p.id===e.dataset.pp).price=+e.value||0;save()});
+ document.querySelectorAll('[data-pn]').forEach(e=>e.onchange=()=>{const p=S.pricing.find(p=>p.id===e.dataset.pn),old=p.type,nw=e.value.trim();if(!nw){e.value=old;return}
+  S.invoices.forEach(i=>{if(i.service===p.service&&i.type===old)i.type=nw});p.type=nw;save()});
+ document.querySelectorAll('[data-pd]').forEach(b=>b.onclick=()=>{if(confirm('Remove this price entry? Existing invoices keep their type and amount.')){S.pricing=S.pricing.filter(p=>p.id!==b.dataset.pd);save();render()}});
+ document.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{const n=prompt('Name:');if(n&&n.trim()){S.pricing.push({id:uid(),service:b.dataset.add,type:n.trim(),price:0});save();render()}});
+}
+
+/* ---------- dialogs ---------- */
+function show(title,html){$('#dt').textContent=title;$('#dbody').innerHTML=html;if(!dlg.open)dlg.showModal()}
+function clientForm(id,after){
+ const c=S.clients.find(x=>x.id===id)||{name:'',phone:'',email:'',notes:''};
+ show(id?'Edit client':'Add client',`<div class="f"><div class="full"><label>Client name *</label><input id="cn" value="${esc(c.name)}"></div>
+ <div><label>Phone</label><input id="cp" value="${esc(c.phone)}"></div><div><label>Email</label><input id="ce" value="${esc(c.email)}"></div>
+ <div class="full"><label>Notes</label><input id="cno" value="${esc(c.notes)}"></div></div>
+ <div class="row" style="margin-top:14px"><button class="btn" id="cs">Save</button>${id?'<button class="btn dng" id="cd">Delete</button>':''}</div>`);
+ $('#cs').onclick=()=>{const name=$('#cn').value.trim();if(!name)return alert('Name is required');
+  if(S.clients.some(x=>x.id!==id&&x.name.toLowerCase()===name.toLowerCase()))return alert('A client with this name already exists');
+  const o=c.id?c:(S.clients.push(c={id:uid()}),c);Object.assign(o,{name,phone:$('#cp').value,email:$('#ce').value,notes:$('#cno').value});
+  save();dlg.close();after?after(o.id):render()};
+ if(id)$('#cd').onclick=()=>{if(S.invoices.some(i=>i.clientId===id))return alert('This client has invoices. Delete those first.');if(confirm('Delete client?')){S.clients=S.clients.filter(x=>x.id!==id);save();dlg.close();render()}};
+}
+
+function invoiceForm(id,preset){
+ const ex=S.invoices.find(i=>i.id===id);
+ const cur=ex||{clientId:preset?.clientId||'',service:'ITR Filing',type:'',details:{},invoiceDate:TODAY(),dueDate:addDays(TODAY(),15),amount:'',notes:''};
+ if(!S.clients.length){show('New invoice','<p>Add a client first.</p><button class="btn" id="ac">+ Add client</button>');$('#ac').onclick=()=>clientForm(null,()=>invoiceForm());return}
+ let priceTouched=!!ex;
+ show(ex?'Edit invoice '+ex.no:'New invoice',`<div class="f">
+ <div><label>Client *</label><div class="row" style="flex-wrap:nowrap"><select id="iC">${opts(S.clients.map(c=>[c.id,c.name]),cur.clientId,'Select client…')}</select><button class="btn sec sm" id="iAC" type="button">+ New</button></div></div>
+ <div><label>Type of service *</label><select id="iS">${opts(Object.keys(SERVICES),cur.service)}</select></div>
+ <div><label id="iTL"></label><select id="iT"></select></div>
+ <span id="iX" style="display:contents"></span>
+ <div><label>Invoice date *</label><input type="date" id="iD" value="${cur.invoiceDate}"></div>
+ <div><label>Payment due date *</label><input type="date" id="iDue" value="${cur.dueDate}"></div>
+ <div><label>Invoice amount (₹) *</label><input type="number" min="0" step="1" id="iA" value="${cur.amount}"><div class="hint" id="iAH"></div></div>
+ <div class="full"><label>Notes / remarks</label><textarea id="iN" rows="2">${esc(cur.notes)}</textarea></div></div>
+ <div class="row" style="margin-top:14px"><button class="btn" id="iSave">${ex?'Save changes':'Create invoice'}</button></div>`);
+ const x=cur.details;
+ const drawExtra=()=>{const svc=$('#iS').value;$('#iTL').textContent=SERVICES[svc].typeLabel+' *';
+  const ts=typesFor(svc);const sel=ts.includes(cur.type)?cur.type:(ts[0]||'');$('#iT').innerHTML=opts(ts,sel);cur.type=$('#iT').value;
+  $('#iX').innerHTML=SERVICES[svc].extra.map(f=>{const v=x[f.k]??(f.k==='fy'&&f.req?fyOf(TODAY()):'');const lb=`<label>${f.l}${f.req?' *':''}</label>`;
+   if(f.kind==='fy')return `<div>${lb}<select data-x="fy">${opts(FYS,v,f.req?undefined:'—')}</select></div>`;
+   if(f.kind==='select')return `<div>${lb}<select data-x="${f.k}">${opts(f.opts,v)}</select></div>`;
+   if(f.kind==='textarea')return `<div class="full">${lb}<textarea data-x="${f.k}" rows="2">${esc(v)}</textarea></div>`;
+   return `<div>${lb}<input type="${f.kind}" data-x="${f.k}" value="${esc(v)}"></div>`}).join('');
+  const pm=$('#iX').querySelector('[data-x="period"]'),fy=$('#iX').querySelector('[data-x="fy"]');
+  if(pm&&fy)pm.onchange=()=>{if(pm.value)fy.value=fyFromMonth(pm.value)};
+  pickPrice()};
+ const pickPrice=()=>{const p=priceFor($('#iS').value,$('#iT').value);
+  if(!priceTouched&&p!==undefined)$('#iA').value=p||'';
+  $('#iAH').textContent=p?`Pricing Master: ${inr(p)}${+$('#iA').value!==p?' (overridden)':''}`:'No price set in Pricing Master — enter manually';};
+ $('#iS').onchange=()=>{cur.type='';priceTouched=false;drawExtra()};
+ $('#iT').onchange=()=>{cur.type=$('#iT').value;priceTouched=false;pickPrice()};
+ $('#iA').oninput=()=>{priceTouched=true;pickPrice()};
+ $('#iD').onchange=()=>{if(!ex)$('#iDue').value=addDays($('#iD').value,15)};
+ $('#iAC').onclick=()=>clientForm(null,cid=>{cur.clientId=cid;invoiceForm(id,{clientId:cid})});
+ drawExtra();
+ $('#iSave').onclick=()=>{
+  const svc=$('#iS').value,details={};let bad='';
+  $('#iX').querySelectorAll('[data-x]').forEach(e=>{details[e.dataset.x]=e.value.trim()});
+  SERVICES[svc].extra.forEach(f=>{if(f.req&&!details[f.k])bad=f.l});
+  if(svc==='GST Filing'&&['GSTR-1','GSTR-3B'].includes($('#iT').value)&&!details.period)bad='Month / Return Period';
+  if(!$('#iC').value)bad='Client';if(!$('#iT').value)bad=SERVICES[svc].typeLabel+' (add one in Pricing Master)';
+  if(!$('#iD').value)bad='Invoice date';if(!$('#iDue').value)bad='Due date';if(!($('#iA').value!==''&&+$('#iA').value>=0))bad='Invoice amount';
+  if(bad)return alert('Please fill: '+bad);
+  const data={clientId:$('#iC').value,service:svc,type:$('#iT').value,details,invoiceDate:$('#iD').value,dueDate:$('#iDue').value,amount:+$('#iA').value,notes:$('#iN').value};
+  if(ex){Object.assign(ex,data);save();dlg.close();render();openInvoice(ex.id)}
+  else{const inv={id:uid(),no:'INV-'+String(S.seq++).padStart(4,'0'),payments:[],...data};S.invoices.push(inv);save();dlg.close();render();openInvoice(inv.id)}
+ };
+}
+
+function openInvoice(id){
+ const i=S.invoices.find(x=>x.id===id);if(!i)return;
+ const st=status(i),od=overdueDays(i);
+ const prow=i.payments.slice().sort((a,b)=>a.date.localeCompare(b.date)).map((p,n)=>`<tr><td>${n+1}</td><td>${fmtD(p.date)}</td><td class="n">${inr(p.amount)}</td><td>${esc(p.mode)}</td><td>${p.proof?`<a class="lnk" data-pv="${p.id}">${esc(p.proof.name||'View')}</a>`:'<span class="mut">—</span>'}</td><td class="w">${esc(p.note||'')}</td><td><button class="btn dng sm" data-pd="${p.id}">Delete</button></td></tr>`).join('');
+ show(`${i.no} · ${client(i.clientId).name}`,`
+ <div class="row"><span class="badge b-${st}">${STATUS_LABEL[st]}</span>${od?`<b style="color:var(--bad)">${od} day${od>1?'s':''} overdue</b>`:''}<span class="sp"></span>
+  <button class="btn sec sm" id="oE">Edit invoice</button><button class="btn dng sm" id="oD">Delete</button></div>
+ <p style="margin:10px 0 0"><b>${esc(i.service)} · ${esc(i.type)}</b><br><span class="mut">${esc(detailText(i))||''}</span></p>
+ <div class="sum"><div class="mut">Invoice date<b>${fmtD(i.invoiceDate)}</b></div><div class="mut">Due date<b>${fmtD(i.dueDate)}</b></div>
+  <div class="mut">Invoice amount<b>${inr(i.amount)}</b></div><div class="mut">Total received<b style="color:var(--ok)">${inr(received(i))}</b></div><div class="mut">Remaining due<b style="color:${remaining(i)?'var(--bad)':'var(--ok)'}">${inr(remaining(i))}</b></div></div>
+ ${i.notes?`<p class="sm mut">Notes: ${esc(i.notes)}</p>`:''}
+ <h2>Payments received</h2>
+ ${i.payments.length?`<div class="tw"><table><thead><tr><th>#</th><th>Date</th><th class="n">Amount</th><th>Mode</th><th>Proof</th><th>Note</th><th></th></tr></thead><tbody>${prow}</tbody></table></div>`:'<div class="empty">No payments yet.</div>'}
+ ${remaining(i)>0?`<div class="card" style="margin-top:12px"><h2>Record a payment</h2><div class="f">
+  <div><label>Amount received (₹) *</label><input type="number" min="1" step="0.01" id="pA" value="${remaining(i)}"></div>
+  <div><label>Payment date *</label><input type="date" id="pD" value="${TODAY()}"></div>
+  <div><label>Payment mode</label><select id="pM">${opts(MODES)}</select></div>
+  <div><label>Screenshot / proof (image or PDF)</label><input type="file" id="pF" accept="image/*,application/pdf"></div>
+  <div class="full"><label>Note</label><input id="pN" placeholder="e.g. UTR / reference"></div></div>
+  <div class="row" style="margin-top:10px"><button class="btn" id="pS">Add payment</button></div></div>`:''}`);
+ $('#oE').onclick=()=>invoiceForm(i.id);
+ $('#oD').onclick=()=>{if(confirm(`Delete ${i.no} and its ${i.payments.length} payment(s)? This cannot be undone.`)){S.invoices=S.invoices.filter(x=>x.id!==i.id);save();dlg.close();render()}};
+ document.querySelectorAll('[data-pd]').forEach(b=>b.onclick=()=>{if(confirm('Delete this payment entry?')){i.payments=i.payments.filter(p=>p.id!==b.dataset.pd);save();render();openInvoice(i.id)}});
+ document.querySelectorAll('[data-pv]').forEach(a=>a.onclick=()=>viewProof(i.payments.find(p=>p.id===a.dataset.pv).proof));
+ const ps=$('#pS');if(ps)ps.onclick=async()=>{
+  const amt=+$('#pA').value;if(!(amt>0))return alert('Enter a valid amount');
+  if(amt>remaining(i)+0.005&&!confirm(`Amount exceeds remaining due (${inr(remaining(i))}). Record anyway?`))return;
+  if(!$('#pD').value)return alert('Enter payment date');
+  let proof=null;const f=$('#pF').files[0];
+  if(f){try{proof=await readProof(f)}catch(e){return alert(e.message)}}
+  i.payments.push({id:uid(),amount:amt,date:$('#pD').value,mode:$('#pM').value,note:$('#pN').value,proof});
+  save();render();openInvoice(i.id)};
+}
+function readProof(f){return new Promise((res,rej)=>{
+ if(f.type==='application/pdf'){if(f.size>4e6)return rej(new Error('PDF is over 4 MB'));const r=new FileReader();r.onload=()=>res({name:f.name,data:r.result});r.readAsDataURL(f);return}
+ const url=URL.createObjectURL(f),im=new Image();
+ im.onload=()=>{const m=1400,k=Math.min(1,m/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;
+  c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(url);res({name:f.name,data:c.toDataURL('image/jpeg',.8)})};
+ im.onerror=()=>rej(new Error('Could not read image'));im.src=url})}
+function viewProof(p){const pdf=p.data.startsWith('data:application/pdf');
+ show('Payment proof — '+p.name,pdf?`<iframe src="${p.data}" style="width:100%;height:70vh;border:0"></iframe>`:`<img src="${p.data}" style="max-width:100%;border-radius:8px">`)}
+
+/* ---------- backup ---------- */
+$('#bExport').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download=`billing-backup-${TODAY()}.json`;a.click()};
+$('#bImport').onclick=()=>$('#fImport').click();
+$('#fImport').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!d.invoices||!d.clients||!d.pricing)throw 0;
+ if(confirm('Replace ALL current data with this backup?')){S=d;await save();render()}}catch{alert('Not a valid backup file')}e.target.value=''};
+$('#bNew').onclick=()=>invoiceForm();
+
+load().then(render);
+</script>
+</body>
+</html>
