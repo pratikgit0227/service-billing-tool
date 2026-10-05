@@ -2,17 +2,31 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f2f2f7">
+<meta name="color-scheme" content="light dark">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Billing">
+<script>try{var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 <title>Service Billing Tool</title>
 <style>
-:root{--bg:#f2f2f7;--card:#fff;--ink:#1c1c1e;--mut:#8e8e93;--line:rgba(60,60,67,.14);--pri:#007aff;--priInk:#fff;
+:root{color-scheme:light;--bg:#f2f2f7;--card:#fff;--ink:#1c1c1e;--mut:#8e8e93;--line:rgba(60,60,67,.14);--pri:#007aff;--priInk:#fff;
 --fill:rgba(118,118,128,.12);--priBg:rgba(0,122,255,.12);
 --ok:#248a3d;--okBg:rgba(52,199,89,.16);--warn:#b25000;--warnBg:rgba(255,149,0,.18);--bad:#d70015;--badBg:rgba(255,59,48,.13);
 --info:#3a3a8c;--infoBg:rgba(88,86,214,.13);--glass:rgba(249,249,249,.8);--shadow:0 1px 2px rgba(0,0,0,.04),0 6px 20px rgba(0,0,0,.05)}
-@media (prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--ink:#f2f2f7;--mut:#98989d;--line:rgba(84,84,88,.6);--pri:#0a84ff;--priInk:#fff;
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#000;--card:#1c1c1e;--ink:#f2f2f7;--mut:#98989d;--line:rgba(84,84,88,.6);--pri:#0a84ff;--priInk:#fff;
 --fill:rgba(118,118,128,.24);--priBg:rgba(10,132,255,.22);
 --ok:#30d158;--okBg:rgba(48,209,88,.2);--warn:#ff9f0a;--warnBg:rgba(255,159,10,.2);--bad:#ff453a;--badBg:rgba(255,69,58,.2);
 --info:#9e9cff;--infoBg:rgba(94,92,230,.28);--glass:rgba(28,28,30,.78);--shadow:none}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#000;--card:#1c1c1e;--ink:#f2f2f7;--mut:#98989d;--line:rgba(84,84,88,.6);--pri:#0a84ff;--priInk:#fff;
+--fill:rgba(118,118,128,.24);--priBg:rgba(10,132,255,.22);
+--ok:#30d158;--okBg:rgba(48,209,88,.2);--warn:#ff9f0a;--warnBg:rgba(255,159,10,.2);--bad:#ff453a;--badBg:rgba(255,69,58,.2);
+--info:#9e9cff;--infoBg:rgba(94,92,230,.28);--glass:rgba(28,28,30,.78);--shadow:none}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
@@ -22,9 +36,17 @@ header h1{font-size:17px;font-weight:700;margin:0 6px 0 0;letter-spacing:-.02em}
 nav{display:flex;gap:2px;background:var(--fill);padding:2px;border-radius:9px}
 nav button{background:none;border:0;padding:5px 14px;border-radius:7px;color:var(--ink);cursor:pointer;font:inherit;font-size:13px;font-weight:500;white-space:nowrap;transition:background .15s}
 nav button.on{background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.14),0 0 0 .5px rgba(0,0,0,.04);font-weight:600}
-@media (prefers-color-scheme:dark){nav button.on{background:#636366}}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) nav button.on{background:#636366}}
+:root[data-theme="dark"] nav button.on{background:#636366}
 .nb{display:inline-block;min-width:17px;padding:0 5px;margin-left:5px;border-radius:99px;background:#ff3b30;color:#fff;font-size:11px;font-weight:700;line-height:17px;text-align:center}
 .sp{flex:1}
+.sw{position:relative;display:inline-flex;align-items:center;gap:7px;cursor:pointer;margin:0;font-size:13px;color:var(--mut);user-select:none}
+.sw input{position:absolute;opacity:0;width:0;height:0}
+.sw i{width:44px;height:26px;border-radius:99px;background:rgba(120,120,128,.32);position:relative;transition:background .2s;display:inline-block}
+.sw i::after{content:'';position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.3);transition:transform .2s}
+.sw input:checked+i{background:#34c759}
+.sw input:checked+i::after{transform:translateX(18px)}
+.sw input:focus-visible+i{box-shadow:0 0 0 3px rgba(0,122,255,.4)}
 main{padding:20px;max-width:1400px;margin:0 auto}
 .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:var(--shadow)}
 .grid{display:grid;gap:14px}
@@ -117,6 +139,7 @@ code{background:var(--fill);padding:1px 6px;border-radius:6px}
   <h1>Service Billing Tool</h1>
   <nav id="nav"></nav>
   <span class="sp"></span>
+  <label class="sw" title="Dark mode">🌙<input type="checkbox" id="thm" aria-label="Dark mode"><i></i></label>
   <span id="tools" style="display:none;align-items:center;gap:10px;flex-wrap:wrap">
     <span id="stat" class="sm mut"></span><span id="who" class="sm mut"></span>
     <button class="btn sm" id="bRem" style="display:none;background:var(--badBg);color:var(--bad)"></button>
@@ -667,10 +690,22 @@ async function enter(){
  signedIn=true;tools(true);$('#who').textContent=data.session.user.email;$('#main').innerHTML='<div class="empty">Loading…</div>';
  try{await load();render();showReminders()}catch(e){$('#main').innerHTML=`<div class="card"><b>Could not load data.</b><p class="mut">${esc(e.message||e)}</p><p class="sm mut">If this is a first run, make sure supabase/schema.sql has been run in your Supabase project.</p><button class="btn" onclick="enter()">Retry</button></div>`}}
 async function boot(){
+ if(cfg.supabaseUrl&&!/YOUR_/.test(cfg.supabaseUrl)&&!window.supabase){$('#main').innerHTML='<div class="card" style="max-width:560px;margin:40px auto"><h2>You appear to be offline</h2><p>The app could not load its cloud library. Reconnect to the internet and reload.</p></div>';return}
  if(!sb){$('#main').innerHTML='<div class="card" style="max-width:560px;margin:40px auto"><h2>Setup needed</h2><p>Open <code>config.js</code> and paste your Supabase project URL and anon key. See README.md for the 5-minute setup.</p></div>';return}
  sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT')showLogin()});
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
  enter()}
+/* ---------- theme (Dark on / off = Light). No saved choice -> follows the device. ---------- */
+const sysDark=()=>matchMedia('(prefers-color-scheme: dark)').matches;
+function applyTheme(){const t=lsGet('theme');if(t)document.documentElement.dataset.theme=t;else delete document.documentElement.dataset.theme;
+ $('#thm').checked=t?t==='dark':sysDark();
+ const m=document.querySelector('meta[name=theme-color]');if(m)m.content=getComputedStyle(document.body).backgroundColor}
+$('#thm').onchange=e=>{lsSet('theme',e.target.checked?'dark':'light');applyTheme()};
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(!lsGet('theme'))applyTheme()});
+applyTheme();
+/* ---------- PWA ---------- */
+if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol))navigator.serviceWorker.register('sw.js').catch(()=>{});
+if(location.hash==='#todos'||location.hash==='#invoices')TAB=location.hash.slice(1);
 boot();
 </script>
 </body>
