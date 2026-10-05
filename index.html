@@ -499,6 +499,25 @@ function buildIcs(list){const stamp=new Date().toISOString().replace(/[-:]/g,'')
 function exportIcs(){const list=S.todos.filter(t=>!t.done&&t.due);if(!list.length)return alert('No open tasks with a due date to export.');
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buildIcs(list)],{type:'text/calendar'}));a.download='billing-todos.ics';a.click()}
 
+/* live feed: Supabase Edge Function "calendar" serves open tasks as .ics at a secret URL */
+async function calendarFeed(regen){
+ const g=await sb.from('meta').select('data').eq('id','calendar').maybeSingle();
+ if(g.error)return alert('Could not read feed settings: '+g.error.message);
+ let token=g.data&&g.data.data&&g.data.data.token;
+ if(!token||regen){token=[...crypto.getRandomValues(new Uint8Array(24))].map(b=>b.toString(16).padStart(2,'0')).join('');
+  const r=await sb.from('meta').upsert({id:'calendar',data:{token}});if(r.error)return alert('Could not save feed token: '+r.error.message)}
+ const url=`${cfg.supabaseUrl}/functions/v1/calendar?t=${token}`;
+ show('Live Google Calendar feed',`<p style="margin-top:0">Your open tasks that have a due date appear as all-day events in a calendar called <b>Billing Tasks</b>. Google refreshes it by itself every few hours (Google decides the timing, usually 12–24 h), so a brand-new task can take a while to show up.</p>
+ <label>Your private feed link</label><div class="row" style="flex-wrap:nowrap"><input id="fU" readonly value="${url}"><button class="btn" id="fC">Copy</button></div>
+ <ol style="padding-left:20px;line-height:1.7"><li>Open <b>calendar.google.com</b> on a computer (the phone app can't add this).</li>
+ <li>Left side → <b>Other calendars</b> → <b>+</b> → <b>From URL</b>.</li><li>Paste the link → <b>Add calendar</b>.</li>
+ <li>Under <b>Settings → Billing Tasks → All-day event notifications</b>, add a reminder (e.g. “0 days before at 9:00 am”).</li></ol>
+ <p class="sm mut">Anyone with this link can read your task titles — don't share it. If it leaks, press <b>New link</b>; the old one stops working at once and you re-add the new one in Google. The feed needs the one-time function setup in README (“Calendar feed”).</p>
+ <div class="row"><button class="btn sec sm" id="fT">Test link</button><button class="btn dng sm" id="fR">New link (revoke old)</button></div>`);
+ $('#fC').onclick=async()=>{try{await navigator.clipboard.writeText(url);$('#fC').textContent='Copied ✓'}catch{$('#fU').select()}};
+ $('#fT').onclick=()=>window.open(url,'_blank','noopener');
+ $('#fR').onclick=()=>{if(confirm('Create a new link? The old one will stop working.'))calendarFeed(true)}}
+
 function vTodos(){
  const T=TODAY(),open=S.todos.filter(t=>!t.done),done=S.todos.filter(t=>t.done).sort((a,b)=>(b.doneAt||'').localeCompare(a.doneAt||''));
  const srt=(a,b)=>(+!!b.pri)-(+!!a.pri)||(a.due||'9').localeCompare(b.due||'9')||a.createdAt.localeCompare(b.createdAt);
@@ -513,7 +532,7 @@ function vTodos(){
  const sug=suggestions(),shown=sug.slice(0,5);
  $('#main').innerHTML=`<div class="grid" style="max-width:760px;margin:0 auto">
  <div class="card"><div class="add"><input id="tIn" placeholder="Add a task…  e.g. “Call Ramesh tomorrow !”  or  “File GSTR-3B 20 oct”" autocomplete="off"><button class="btn sec" id="tClip" title="Attach screenshot / PDF (or paste with Ctrl+V)">📎</button><input type="file" id="tFile" accept="image/*,application/pdf" multiple hidden><button class="btn" id="tAdd">Add</button></div><div class="tm" id="tDA" style="margin-top:6px"></div>
-  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically. Paste a screenshot with Ctrl+V to attach it.</div><div style="margin-top:8px"><button class="btn sec sm" id="tIcs">📅 Export open tasks to calendar (.ics)</button></div></div>
+  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically. Paste a screenshot with Ctrl+V to attach it.</div><div style="margin-top:8px"><button class="btn sec sm" id="tFeed">🔄 Live Google Calendar feed</button> <button class="btn sec sm" id="tIcs">📅 Export .ics</button></div></div>
  ${sug.length?`<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h2 style="margin:0">Suggested follow-ups <span class="mut" style="font-weight:500">${sug.length}</span></h2><button class="btn sec sm" id="sAll">Add all</button></div>
   <div class="hint" style="margin:0 0 6px">Unpaid invoices that are overdue or 30+ days old and have no open task.</div>
   ${shown.map(i=>`<div class="sug"><div class="tt">${esc(client(i.clientId).name)} <span class="mut">· ${esc(i.no)} · ${inr(remaining(i))}${overdueDays(i)?` · ${overdueDays(i)}d overdue`:''}</span></div><button class="btn sec sm" data-s="${i.id}">+ Task</button></div>`).join('')}
@@ -535,7 +554,7 @@ function vTodos(){
   setTimeout(()=>{t.done=!t.done;t.auto=false;t.doneAt=t.done?new Date().toISOString():'';save();render()},260)});
  document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.d);removeProofs((t.attachments||[]).map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==b.dataset.d);save();render()});
  document.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>todoForm(b.dataset.e));
- $('#tIcs').onclick=exportIcs;
+ $('#tIcs').onclick=exportIcs;$('#tFeed').onclick=()=>calendarFeed();
  document.querySelectorAll('[data-at]').forEach(b=>b.onclick=e=>{e.stopPropagation();viewAtts(b.dataset.at)});
  document.querySelectorAll('[data-iv]').forEach(b=>b.onclick=e=>{e.stopPropagation();openInvoice(b.dataset.iv)});
  document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{S.todos.push(sugTodo(S.invoices.find(i=>i.id===b.dataset.s)));save();render()});
