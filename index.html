@@ -110,6 +110,7 @@ code{background:var(--fill);padding:1px 6px;border-radius:6px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <header>
@@ -155,17 +156,17 @@ const SEED_PRICES=[['ITR Filing','ITR-1'],['ITR Filing','ITR-2'],['ITR Filing','
 /* ---------- cloud storage (Supabase: Postgres + Auth + private Storage bucket) ---------- */
 const cfg=window.BILLING_CONFIG||{};
 const sb=(cfg.supabaseUrl&&!/YOUR_/.test(cfg.supabaseUrl)&&window.supabase)?supabase.createClient(cfg.supabaseUrl,cfg.supabaseAnonKey):null;
-let S={clients:[],pricing:[],invoices:[],todos:[],seq:1};
+let S={clients:[],pricing:[],invoices:[],todos:[],gdel:[],seq:1};
 const TABLES=['clients','pricing','invoices'];
 let snap={clients:{},pricing:{},invoices:{},seq:null},chain=Promise.resolve(),pending=0,signedIn=false;
 const setStat=(t,bad)=>{const e=document.getElementById('stat');if(e){e.textContent=t;e.style.color=bad?'var(--bad)':''}};
 async function load(){
  const res=await Promise.all([...TABLES.map(t=>sb.from(t).select('id,data')),sb.from('meta').select('data').eq('id','seq'),sb.from('meta').select('data').eq('id','todos')]);
  res.forEach(r=>{if(r.error)throw r.error});
- S={clients:[],pricing:[],invoices:[],todos:[],seq:1};snap={clients:{},pricing:{},invoices:{}};
+ S={clients:[],pricing:[],invoices:[],todos:[],gdel:[],seq:1};snap={clients:{},pricing:{},invoices:{}};
  TABLES.forEach((t,k)=>res[k].data.forEach(r=>{S[t].push(r.data);snap[t][r.id]=JSON.stringify(r.data)}));
  const m=res[3].data[0];S.seq=m?m.data.n:1;snap.seq=S.seq;S.invoices.forEach(normInv);
- const td=res[4].data[0];S.todos=td?td.data.items:[];snap.todos=JSON.stringify(S.todos);
+ const td=res[4].data[0];S.todos=td?td.data.items:[];S.gdel=(td&&td.data.gdel)||[];snap.todos=JSON.stringify([S.todos,S.gdel]);
  if(!S.pricing.length){S.pricing=SEED_PRICES.map(([service,type])=>({id:uid(),service,type,price:0}));await flush()}
  setStat('Synced');
 }
@@ -179,7 +180,7 @@ async function flush(){
   if(up.length){const{error}=await sb.from(t).upsert(up);if(error)throw error;up.forEach(r=>snap[t][r.id]=JSON.stringify(r.data))}
   if(del.length){const{error}=await sb.from(t).delete().in('id',del);if(error)throw error;del.forEach(id=>delete snap[t][id])}
  }
- {const j=JSON.stringify(S.todos);if(snap.todos!==j){const{error}=await sb.from('meta').upsert({id:'todos',data:{items:S.todos}});if(error)throw error;snap.todos=j}}
+ {const j=JSON.stringify([S.todos,S.gdel]);if(snap.todos!==j){const{error}=await sb.from('meta').upsert({id:'todos',data:{items:S.todos,gdel:S.gdel}});if(error)throw error;snap.todos=j}}
  if(snap.seq!==S.seq){const{error}=await sb.from('meta').upsert({id:'seq',data:{n:S.seq}});if(error)throw error;snap.seq=S.seq}
  setStat('Saved to cloud');
 }
@@ -254,6 +255,7 @@ function render(){
  $('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{TAB=b.dataset.t;render()});
  ({dashboard:vDash,invoices:vInv,todos:vTodos,clients:vClients,pricing:vPricing})[TAB]();
  updRem();
+ updG();if(gReady())setTimeout(gSyncAll,50);
 }
 function invTable(list,{showActions=true}={}){
  if(!list.length)return '<div class="empty">No invoices match.</div>';
@@ -461,10 +463,12 @@ const mkDate=(d,m,y)=>{d=+d;m=+m;if(m<1||m>12||d<1||d>31)return '';const T=TODAY
  const f=yy=>`${yy}-${pad(m)}-${pad(d)}`;let r=f(yy);if(!y&&r<T)r=f(++yy);return new Date(Date.UTC(yy,m-1,d)).getUTCMonth()===m-1?r:''};
 /* "Call Ramesh tomorrow !" / "File GSTR-3B 20 oct" / "Follow up fri" -> {title,due,pri} */
 function parseTask(raw){
- let t=' '+raw+' ',due='',pri=0;const T=TODAY();
+ let t=' '+raw+' ',due='',pri=0,time='';const T=TODAY();
  const take=(re,fn)=>{const m=t.match(re);if(!m)return false;const v=fn(m);if(!v)return false;t=t.replace(m[0],' ');return true};
  const D=v=>{if(v)due=v;return v};
  take(/\s(!+|urgent|asap)(?=\s)/i,()=>{pri=1;return 1});
+ take(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s?(am|pm)(?=\s)/i,m=>{let h=+m[1];if(h<1||h>12)return false;const pm=m[3].toLowerCase()==='pm';if(pm&&h<12)h+=12;if(!pm&&h===12)h=0;time=pad(h)+':'+(m[2]||'00');return 1})||
+ take(/\s(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)(?=\s)/,m=>{time=pad(+m[1])+':'+m[2];return 1});
  take(/\s(today|tonight)(?=\s)/i,()=>D(T))||
  take(/\s(tomorrow|tmrw|tmr)(?=\s)/i,()=>D(addDays(T,1)))||
  take(/\sin (\d{1,3}) days?(?=\s)/i,m=>D(addDays(T,+m[1])))||
@@ -475,10 +479,11 @@ function parseTask(raw){
  take(new RegExp('\\s(?:on |this |next )?('+WDRE+')(?=\\s)','i'),m=>{const w=['sun','mon','tue','wed','thu','fri','sat'].indexOf(m[1].slice(0,3).toLowerCase());
   const cur=new Date(dnum(T)*864e5).getUTCDay();return D(addDays(T,((w-cur+7)%7)||7))});
  let title=t.replace(/\s+(by|on|due on|due|before|at)\s*$/i,' ').replace(/\s+/g,' ').trim();
- return {title:title||raw.trim(),due,pri};
+ if(time&&!due)due=T;return {title:title||raw.trim(),due,time,pri};
 }
 const dueLabel=d=>d===TODAY()?'Today':d===addDays(TODAY(),1)?'Tomorrow':d===addDays(TODAY(),-1)?'Yesterday':fmtD(d);
-const newTodo=(o)=>({id:uid(),title:'',due:'',pri:0,invoiceId:'',done:false,createdAt:new Date().toISOString(),...o});
+const fmtTime=h=>{const[a,b]=h.split(':').map(Number);return `${a%12||12}:${pad(b)} ${a<12?'AM':'PM'}`};
+const newTodo=(o)=>({id:uid(),title:'',due:'',time:'',gcalId:'',pri:0,invoiceId:'',done:false,createdAt:new Date().toISOString(),...o});
 /* tasks linked to an invoice complete themselves once that invoice is fully paid */
 function syncTodos(){let ch=false;S.todos.forEach(t=>{if(!t.done&&t.invoiceId){const i=S.invoices.find(x=>x.id===t.invoiceId);if(i&&remaining(i)<=0){t.done=true;t.auto=true;t.doneAt=new Date().toISOString();ch=true}}});if(ch&&signedIn)save()}
 function suggestions(){
@@ -498,6 +503,63 @@ function buildIcs(list){const stamp=new Date().toISOString().replace(/[-:]/g,'')
  return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Service Billing Tool//EN','CALSCALE:GREGORIAN',...list.map(ev),'END:VCALENDAR'].join('\r\n')}
 function exportIcs(){const list=S.todos.filter(t=>!t.done&&t.due);if(!list.length)return alert('No open tasks with a due date to export.');
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buildIcs(list)],{type:'text/calendar'}));a.download='billing-todos.ics';a.click()}
+
+/* ---------- Google Calendar auto-sync (browser -> Google Calendar API, token model) ---------- */
+const G={tok:null,exp:0,msg:'',busy:false};
+const gReady=()=>!!G.tok&&Date.now()<G.exp-60000;
+const gForget=t=>{if(t&&t.gcalId)S.gdel.push(t.gcalId)};
+const gSig=t=>[t.title,t.due,t.time||'',t.pri?1:0,t.done?1:0,t.invoiceId||''].join('|');
+function updG(){const b=$('#tG');if(!b)return;
+ b.textContent=!cfg.googleClientId?'📅 Auto-sync to Google Calendar':gReady()?'✓ Google Calendar connected':'📅 Connect Google Calendar';
+ b.title=G.msg||''}
+async function gapi(method,path,body){
+ const r=await fetch('https://www.googleapis.com/calendar/v3'+path,{method,headers:{Authorization:'Bearer '+G.tok,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+ if(r.status===401){G.tok=null;updG();throw new Error('Google session expired — click Connect again')}
+ if(r.status===204)return{};if(r.status===404||r.status===410)return{gone:true};
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error((j.error&&j.error.message)||('Google error '+r.status));return j}
+function gEvent(t){
+ const i=t.invoiceId&&S.invoices.find(x=>x.id===t.invoiceId);
+ const ev={summary:(t.pri?'! ':'')+t.title,description:(i?`Invoice ${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due\n`:'')+'From Service Billing Tool'};
+ if(t.time){const tz=Intl.DateTimeFormat().resolvedOptions().timeZone,e=new Date(`${t.due}T${t.time}:00`);e.setMinutes(e.getMinutes()+30);
+  ev.start={dateTime:`${t.due}T${t.time}:00`,timeZone:tz};ev.end={dateTime:`${iso(e)}T${pad(e.getHours())}:${pad(e.getMinutes())}:00`,timeZone:tz};
+  ev.reminders={useDefault:false,overrides:[{method:'popup',minutes:10}]}}
+ else{ev.start={date:t.due};ev.end={date:addDays(t.due,1)};ev.reminders={useDefault:true}}
+ return ev}
+async function gSyncAll(){
+ if(!gReady()||G.busy)return;G.busy=true;let ch=false;
+ try{
+  for(const id of S.gdel.slice()){await gapi('DELETE','/calendars/primary/events/'+id);S.gdel=S.gdel.filter(x=>x!==id);ch=true}
+  for(const t of S.todos){const sig=gSig(t);if(t.gSig===sig)continue;
+   if(!t.done&&t.due){
+    if(t.gcalId){const r=await gapi('PATCH','/calendars/primary/events/'+t.gcalId,gEvent(t));if(r.gone)t.gcalId=''}
+    if(!t.gcalId){const r=await gapi('POST','/calendars/primary/events',gEvent(t));t.gcalId=r.id}
+   }else if(t.gcalId){await gapi('DELETE','/calendars/primary/events/'+t.gcalId);t.gcalId=''}
+   t.gSig=sig;ch=true}
+  G.msg='Synced '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});setStat('Google Calendar synced')
+ }catch(e){G.msg=e.message;setStat('Calendar: '+e.message,1)}
+ finally{G.busy=false;if(ch)save();updG()}}
+function gConnect(){
+ if(!(window.google&&google.accounts&&google.accounts.oauth2))return alert('Google sign-in is still loading (or blocked). Check your internet and try again.');
+ const tc=google.accounts.oauth2.initTokenClient({client_id:cfg.googleClientId,scope:'https://www.googleapis.com/auth/calendar.events',
+  callback:r=>{if(r.error){G.msg=r.error;return updG()}G.tok=r.access_token;G.exp=Date.now()+(+r.expires_in||3600)*1000;lsSet('g-on','1');updG();gSyncAll()},
+  error_callback:e=>{G.msg=e.message||e.type;updG()}});
+ tc.requestAccessToken({prompt:lsGet('g-on')?'':'consent'})}
+function gClick(){
+ if(!cfg.googleClientId)return gSetupHelp();
+ if(!gReady())return gConnect();
+ show('Google Calendar',`<p style="margin-top:0">Connected. Tasks with a due date are added to your <b>primary</b> Google Calendar automatically when you create, change, complete or delete them (while this page is open and connected).</p>
+ <ul style="padding-left:20px;line-height:1.7"><li>Task with a <b>time</b> (e.g. “call Ramesh fri 5pm”) → timed event with a popup 10 minutes before.</li><li>Task with only a <b>date</b> → all-day event using your calendar’s default notifications.</li><li>Google’s sign-in lasts about an hour — if the button says Connect again, click it.</li></ul>
+ <p class="sm mut">${esc(G.msg)}</p><div class="row"><button class="btn" id="gS">Sync now</button><button class="btn dng" id="gD">Disconnect</button></div>`);
+ $('#gS').onclick=()=>{S.todos.forEach(t=>t.gSig='');dlg.close();gSyncAll()};
+ $('#gD').onclick=()=>{try{google.accounts.oauth2.revoke(G.tok)}catch{}G.tok=null;lsSet('g-on','');dlg.close();updG()}}
+function gSetupHelp(){
+ show('Set up Google Calendar auto-sync (one time, ~10 min)',`<ol style="padding-left:20px;line-height:1.75;margin-top:0">
+ <li>Open <b>console.cloud.google.com</b> → create a project (e.g. “Billing”).</li>
+ <li><b>APIs &amp; Services → Library</b> → search <b>Google Calendar API</b> → <b>Enable</b>.</li>
+ <li><b>Google Auth Platform</b> (or “OAuth consent screen”) → <b>Get started</b>: app name “Billing”, your email, audience <b>External</b>. Then <b>Audience → Test users → Add</b> your Google email.</li>
+ <li><b>Credentials → Create credentials → OAuth client ID</b> → type <b>Web application</b> → under <b>Authorized JavaScript origins</b> add <code>https://pratikgit0227.github.io</code> → <b>Create</b>.</li>
+ <li>Copy the <b>Client ID</b> (ends in <code>.apps.googleusercontent.com</code>) and send it to Claude, who adds it to <code>config.js</code>. It is safe to share — it is not a secret.</li></ol>
+ <p class="sm mut">Google will say “app not verified” the first time — click Advanced → Continue. That is normal for a personal app in testing mode.</p>`)}
 
 /* live feed: Supabase Edge Function "calendar" serves open tasks as .ics at a secret URL */
 async function calendarFeed(regen){
@@ -523,7 +585,7 @@ function vTodos(){
  const srt=(a,b)=>(+!!b.pri)-(+!!a.pri)||(a.due||'9').localeCompare(b.due||'9')||a.createdAt.localeCompare(b.createdAt);
  const inv=t=>t.invoiceId&&S.invoices.find(i=>i.id===t.invoiceId);
  const row=t=>{const i=inv(t),chips=[];
-  if(t.due&&!t.done)chips.push(`<span class="chip ${t.due<T?'bad':t.due===T?'today':''}">${esc(dueLabel(t.due))}</span>`);
+  if(t.due&&!t.done)chips.push(`<span class="chip ${t.due<T?'bad':t.due===T?'today':''}">${esc(dueLabel(t.due))}${t.time?' · '+fmtTime(t.time):''}</span>`);
   if(i)chips.push(`<span class="chip inv" data-iv="${i.id}">${esc(i.no)} · ${esc(client(i.clientId).name)}${remaining(i)>0?' · '+inr(remaining(i))+' due':' · paid ✓'}</span>`);
   if((t.attachments||[]).length)chips.push(`<span class="chip inv" data-at="${t.id}">📎 ${t.attachments.length}</span>`);
   if(t.auto)chips.push('<span class="chip">auto-completed: invoice paid</span>');
@@ -532,7 +594,7 @@ function vTodos(){
  const sug=suggestions(),shown=sug.slice(0,5);
  $('#main').innerHTML=`<div class="grid" style="max-width:760px;margin:0 auto">
  <div class="card"><div class="add"><input id="tIn" placeholder="Add a task…  e.g. “Call Ramesh tomorrow !”  or  “File GSTR-3B 20 oct”" autocomplete="off"><button class="btn sec" id="tClip" title="Attach screenshot / PDF (or paste with Ctrl+V)">📎</button><input type="file" id="tFile" accept="image/*,application/pdf" multiple hidden><button class="btn" id="tAdd">Add</button></div><div class="tm" id="tDA" style="margin-top:6px"></div>
-  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically. Paste a screenshot with Ctrl+V to attach it.</div><div style="margin-top:8px"><button class="btn sec sm" id="tFeed">🔄 Live Google Calendar feed</button> <button class="btn sec sm" id="tIcs">📅 Export .ics</button></div></div>
+  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically. Paste a screenshot with Ctrl+V to attach it.</div><div style="margin-top:8px"><button class="btn sm" id="tG">📅 Connect Google Calendar</button> <button class="btn sec sm" id="tFeed">🔄 Live Google Calendar feed</button> <button class="btn sec sm" id="tIcs">📅 Export .ics</button></div></div>
  ${sug.length?`<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h2 style="margin:0">Suggested follow-ups <span class="mut" style="font-weight:500">${sug.length}</span></h2><button class="btn sec sm" id="sAll">Add all</button></div>
   <div class="hint" style="margin:0 0 6px">Unpaid invoices that are overdue or 30+ days old and have no open task.</div>
   ${shown.map(i=>`<div class="sug"><div class="tt">${esc(client(i.clientId).name)} <span class="mut">· ${esc(i.no)} · ${inr(remaining(i))}${overdueDays(i)?` · ${overdueDays(i)}d overdue`:''}</span></div><button class="btn sec sm" data-s="${i.id}">+ Task</button></div>`).join('')}
@@ -544,7 +606,7 @@ function vTodos(){
  const inp=$('#tIn'),hint=$('#tHint');
  const add=()=>{const r=inp.value.trim();if(!r)return;const p=parseTask(r);S.todos.push(newTodo({...p,id:tdraft.id,attachments:tdraft.atts}));tdraft={id:uid(),atts:[]};save();render();$('#tIn').focus()};
  inp.oninput=()=>{const r=inp.value.trim();if(!r){hint.textContent='Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it\'s picked up automatically.';return}
-  const p=parseTask(r);hint.textContent=`→ “${p.title}”${p.due?' · due '+dueLabel(p.due):' · no date'}${p.pri?' · high priority':''}`};
+  const p=parseTask(r);hint.textContent=`→ “${p.title}”${p.due?' · due '+dueLabel(p.due)+(p.time?' '+fmtTime(p.time):''):' · no date'}${p.pri?' · high priority':''}`};
  inp.onkeydown=e=>{if(e.key==='Enter')add()};$('#tAdd').onclick=add;
  const drawDraft=()=>{$('#tDA').innerHTML=tdraft.atts.map(a=>`<span class="chip inv">📎 ${esc(a.name)} <span data-xd="${a.id}" style="cursor:pointer;margin-left:4px">✕</span></span>`).join('');
   document.querySelectorAll('[data-xd]').forEach(x=>x.onclick=()=>{const k=tdraft.atts.findIndex(a=>a.id===x.dataset.xd);removeProofs([tdraft.atts[k].path]);tdraft.atts.splice(k,1);drawDraft()})};
@@ -552,15 +614,15 @@ function vTodos(){
  $('#tClip').onclick=()=>$('#tFile').click();$('#tFile').onchange=e=>{attachFiles([...e.target.files],tdraft.id,tdraft.atts,drawDraft);e.target.value=''};
  document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.c);const row=b.closest('.todo');row.classList.toggle('done');
   setTimeout(()=>{t.done=!t.done;t.auto=false;t.doneAt=t.done?new Date().toISOString():'';save();render()},260)});
- document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.d);removeProofs((t.attachments||[]).map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==b.dataset.d);save();render()});
+ document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.d);gForget(t);removeProofs((t.attachments||[]).map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==b.dataset.d);save();render()});
  document.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>todoForm(b.dataset.e));
- $('#tIcs').onclick=exportIcs;$('#tFeed').onclick=()=>calendarFeed();
+ $('#tIcs').onclick=exportIcs;$('#tG').onclick=gClick;$('#tFeed').onclick=()=>calendarFeed();
  document.querySelectorAll('[data-at]').forEach(b=>b.onclick=e=>{e.stopPropagation();viewAtts(b.dataset.at)});
  document.querySelectorAll('[data-iv]').forEach(b=>b.onclick=e=>{e.stopPropagation();openInvoice(b.dataset.iv)});
  document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{S.todos.push(sugTodo(S.invoices.find(i=>i.id===b.dataset.s)));save();render()});
  const sa=$('#sAll');if(sa)sa.onclick=()=>{if(sug.length>10&&!confirm(`Create ${sug.length} follow-up tasks?`))return;sug.forEach(i=>S.todos.push(sugTodo(i)));save();render()};
  const dt=$('#dTog');if(dt)dt.onclick=()=>{lsSet('todo-done',lsGet('todo-done')==='1'?'0':'1');render()};
- const dc=$('#dClr');if(dc)dc.onclick=()=>{if(confirm('Delete all completed tasks?')){S.todos.filter(t=>t.done).forEach(t=>removeProofs((t.attachments||[]).map(a=>a.path)));S.todos=S.todos.filter(t=>!t.done);save();render()}};
+ const dc=$('#dClr');if(dc)dc.onclick=()=>{if(confirm('Delete all completed tasks?')){S.todos.filter(t=>t.done).forEach(t=>{gForget(t);removeProofs((t.attachments||[]).map(a=>a.path))});S.todos=S.todos.filter(t=>!t.done);save();render()}};
 }
 /* attachments on tasks: stored in the private "proofs" bucket under todo-<id>/ */
 let tdraft={id:uid(),atts:[]},editTodoId=null,pasteTarget=null;
@@ -585,6 +647,7 @@ async function viewAtts(tid,only){
 function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;t.attachments=t.attachments||[];editTodoId=id;
  show('Edit task',`<div class="f"><div class="full"><label>Task</label><input id="tT" value="${esc(t.title)}"></div>
  <div><label>Due date</label><input type="date" id="tD" value="${t.due||''}"></div>
+ <div><label>Time (optional)</label><input type="time" id="tM" value="${t.time||''}"></div>
  <div><label>Priority</label><select id="tP"><option value="0">Normal</option><option value="1" ${t.pri?'selected':''}>High</option></select></div>
  <div class="full"><label>Linked invoice (optional)</label><select id="tI">${opts(S.invoices.slice().sort((a,b)=>b.no.localeCompare(a.no)).map(i=>[i.id,`${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due`]),t.invoiceId,'None')}</select></div>
  <div class="full"><label>Attachments — screenshots or PDFs (you can also paste with Ctrl+V)</label><div id="tA"></div><input type="file" id="tF" accept="image/*,application/pdf" multiple></div></div>
@@ -596,8 +659,8 @@ function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;t.attachme
  todoAtt();
  $('#tF').onchange=e=>{attachFiles([...e.target.files],t.id,t.attachments,()=>{save();todoAtt&&todoAtt()});e.target.value=''};
  $('#tCal').onclick=()=>{const d=$('#tD').value;if(!d)return alert('Set a due date first, then add it to your calendar.');window.open(calUrl({...t,title:$('#tT').value.trim()||t.title,due:d,pri:+$('#tP').value}),'_blank','noopener')};
- $('#tS').onclick=()=>{const v=$('#tT').value.trim();if(!v)return alert('Task cannot be empty');Object.assign(t,{title:v,due:$('#tD').value,pri:+$('#tP').value,invoiceId:$('#tI').value});save();dlg.close();render()};
- $('#tX').onclick=()=>{if(!confirm('Delete this task'+(t.attachments.length?' and its attachments':'')+'?'))return;removeProofs(t.attachments.map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==id);save();dlg.close();render()}}
+ $('#tS').onclick=()=>{const v=$('#tT').value.trim();if(!v)return alert('Task cannot be empty');Object.assign(t,{title:v,due:$('#tD').value,time:$('#tM').value,pri:+$('#tP').value,invoiceId:$('#tI').value});save();dlg.close();render()};
+ $('#tX').onclick=()=>{if(!confirm('Delete this task'+(t.attachments.length?' and its attachments':'')+'?'))return;gForget(t);removeProofs(t.attachments.map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==id);save();dlg.close();render()}}
 
 /* ---------- export / import / auth ---------- */
 $('#bExport').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download=`billing-export-${TODAY()}.json`;a.click()};
