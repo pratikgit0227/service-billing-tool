@@ -26,11 +26,8 @@ public: data is protected by login and row-level security, not by hiding the pag
 - Enable daily backups in Supabase (paid plan) or use **Export data** regularly (exports records; proof files stay in Storage).
 - **Import data** accepts exports from this version and the old local-only version (proofs are uploaded to Storage).
 
-## Calendar feed (one-time setup)
+## Google Calendar sync
 
-Lets Google Calendar subscribe to your open to-do tasks (To-do -> "Live Google Calendar feed").
-
-1. Supabase -> **Edge Functions** -> **Deploy a new function** -> **Via Editor**.
-2. Name it exactly `calendar`, paste the contents of `supabase/functions/calendar/index.ts`, **Deploy**.
-3. Open the function's settings and turn **off** "Verify JWT" / "Enforce JWT verification" (Google can't send a login; the secret token in the link is the protection), then save/redeploy.
-4. In the app, open To-do -> **Live Google Calendar feed**, copy the link, add it in Google Calendar -> Other calendars -> From URL.
+To-do tasks sync to your primary Google Calendar from the browser (Google OAuth, token model).
+Set `googleClientId` in `config.js` (Google Cloud -> Credentials -> OAuth client ID, type Web application,
+authorized JavaScript origin = the site URL). Then To-do -> "Connect Google Calendar".
