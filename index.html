@@ -5,60 +5,107 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Service Billing Tool</title>
 <style>
-:root{--bg:#f5f6f8;--card:#fff;--ink:#1c2230;--mut:#6b7385;--line:#e3e6ec;--pri:#1f4fd8;--priInk:#fff;
---ok:#16794a;--okBg:#e3f5ec;--warn:#9a6200;--warnBg:#fff3d6;--bad:#b3261e;--badBg:#fde7e5;--info:#34507a;--infoBg:#e8eef8}
-@media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1b2029;--ink:#e8ebf1;--mut:#97a0b3;--line:#2b3240;--pri:#6b8cff;--priInk:#0c1020;
---ok:#5fd39b;--okBg:#173326;--warn:#f0b955;--warnBg:#3a2d10;--bad:#ff8a80;--badBg:#3b1917;--info:#9db8e8;--infoBg:#1d2a40}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-header h1{font-size:16px;margin:0 12px 0 0}
-nav{display:flex;gap:4px;flex-wrap:wrap}
-nav button{background:none;border:0;padding:7px 14px;border-radius:8px;color:var(--mut);cursor:pointer;font:inherit;font-weight:600}
-nav button.on{background:var(--infoBg);color:var(--pri)}
+:root{--bg:#f2f2f7;--card:#fff;--ink:#1c1c1e;--mut:#8e8e93;--line:rgba(60,60,67,.14);--pri:#007aff;--priInk:#fff;
+--fill:rgba(118,118,128,.12);--priBg:rgba(0,122,255,.12);
+--ok:#248a3d;--okBg:rgba(52,199,89,.16);--warn:#b25000;--warnBg:rgba(255,149,0,.18);--bad:#d70015;--badBg:rgba(255,59,48,.13);
+--info:#3a3a8c;--infoBg:rgba(88,86,214,.13);--glass:rgba(249,249,249,.8);--shadow:0 1px 2px rgba(0,0,0,.04),0 6px 20px rgba(0,0,0,.05)}
+@media (prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--ink:#f2f2f7;--mut:#98989d;--line:rgba(84,84,88,.6);--pri:#0a84ff;--priInk:#fff;
+--fill:rgba(118,118,128,.24);--priBg:rgba(10,132,255,.22);
+--ok:#30d158;--okBg:rgba(48,209,88,.2);--warn:#ff9f0a;--warnBg:rgba(255,159,10,.2);--bad:#ff453a;--badBg:rgba(255,69,58,.2);
+--info:#9e9cff;--infoBg:rgba(94,92,230,.28);--glass:rgba(28,28,30,.78);--shadow:none}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:10px 20px;position:sticky;top:0;z-index:5;border-bottom:.5px solid var(--line)}
+header::before{content:'';position:absolute;inset:0;z-index:-1;background:var(--glass);-webkit-backdrop-filter:saturate(180%) blur(22px);backdrop-filter:saturate(180%) blur(22px)}
+header h1{font-size:17px;font-weight:700;margin:0 6px 0 0;letter-spacing:-.02em}
+nav{display:flex;gap:2px;background:var(--fill);padding:2px;border-radius:9px}
+nav button{background:none;border:0;padding:5px 14px;border-radius:7px;color:var(--ink);cursor:pointer;font:inherit;font-size:13px;font-weight:500;white-space:nowrap;transition:background .15s}
+nav button.on{background:var(--card);box-shadow:0 1px 3px rgba(0,0,0,.14),0 0 0 .5px rgba(0,0,0,.04);font-weight:600}
+@media (prefers-color-scheme:dark){nav button.on{background:#636366}}
+.nb{display:inline-block;min-width:17px;padding:0 5px;margin-left:5px;border-radius:99px;background:#ff3b30;color:#fff;font-size:11px;font-weight:700;line-height:17px;text-align:center}
 .sp{flex:1}
-main{padding:16px 20px;max-width:1400px;margin:0 auto}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
-.grid{display:grid;gap:12px}
+main{padding:20px;max-width:1400px;margin:0 auto}
+.card{background:var(--card);border-radius:14px;padding:16px;box-shadow:var(--shadow)}
+.grid{display:grid;gap:14px}
 .kpis{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px}
-.kpi .l{color:var(--mut);font-size:12px}
-.kpi .v{font-size:22px;font-weight:700;margin-top:2px}
+.kpi .l{color:var(--mut);font-size:12px;font-weight:500}
+.kpi .v{font-size:26px;font-weight:700;margin-top:2px;letter-spacing:-.03em}
 .kpi.bad .v{color:var(--bad)}.kpi.ok .v{color:var(--ok)}.kpi.warn .v{color:var(--warn)}
 .two{grid-template-columns:repeat(auto-fit,minmax(380px,1fr))}
-h2{font-size:14px;margin:0 0 10px}
+h2{font-size:17px;font-weight:700;margin:0 0 10px;letter-spacing:-.02em}
+h2.bad{color:var(--bad)}
 table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:8px 8px;border-bottom:1px solid var(--line);vertical-align:top;white-space:nowrap}
-th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
-td.n,th.n{text-align:right}
+th,td{text-align:left;padding:9px 8px;border-bottom:.5px solid var(--line);vertical-align:top;white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+th{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 td.w{white-space:normal;min-width:150px}
-tr.click{cursor:pointer}tr.click:hover{background:var(--bg)}
+tr.click{cursor:pointer;transition:background .12s}tr.click:hover{background:var(--fill)}
 .tw{overflow-x:auto}
-.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:600}
 .b-Paid{background:var(--okBg);color:var(--ok)}
 .b-Partial{background:var(--warnBg);color:var(--warn)}
 .b-Pending{background:var(--infoBg);color:var(--info)}
 .b-Overdue{background:var(--badBg);color:var(--bad)}
-button.btn{background:var(--pri);color:var(--priInk);border:0;border-radius:8px;padding:8px 14px;font:inherit;font-weight:600;cursor:pointer}
-button.btn.sec{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+button.btn{background:var(--pri);color:var(--priInk);border:0;border-radius:10px;padding:8px 16px;font:inherit;font-weight:600;cursor:pointer;transition:opacity .12s,transform .12s}
+button.btn:hover{opacity:.9}button.btn:active{opacity:.65;transform:scale(.98)}
+button.btn:disabled{opacity:.45;cursor:default}
+button.btn.sec{background:var(--priBg);color:var(--pri)}
 button.btn.dng{background:var(--badBg);color:var(--bad)}
-button.btn.sm{padding:4px 10px;font-size:12px}
-input,select,textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 9px;width:100%}
-label{display:block;font-size:12px;color:var(--mut);margin-bottom:3px}
-.f{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+button.btn.sm{padding:5px 12px;font-size:13px;border-radius:8px}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--fill);border:0;border-radius:10px;padding:9px 12px;width:100%;outline:none;transition:box-shadow .15s}
+input:focus,select:focus,textarea:focus{box-shadow:0 0 0 3px rgba(0,122,255,.35)}
+input[type=file]{padding:7px 10px}
+label{display:block;font-size:12px;font-weight:500;color:var(--mut);margin:0 0 4px 2px}
+.f{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
 .f .full{grid-column:1/-1}
-.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-bottom:14px;align-items:end}
-dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);padding:0;width:min(780px,94vw);max-height:92vh}
-dialog::backdrop{background:rgba(0,0,0,.45)}
-.dh{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--card)}
-.dh h3{margin:0;font-size:15px}
-.db{padding:16px}
+.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:10px;margin-bottom:14px;align-items:end}
+dialog{border:0;border-radius:18px;background:var(--card);color:var(--ink);padding:0;width:min(780px,94vw);max-height:92vh;box-shadow:0 24px 70px rgba(0,0,0,.35)}
+dialog::backdrop{background:rgba(0,0,0,.32);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.dh{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:.5px solid var(--line);position:sticky;top:0;z-index:2;background:var(--glass);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+.dh h3{margin:0;font-size:16px;font-weight:700}
+.db{padding:18px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .mut{color:var(--mut)}.sm{font-size:12px}
-.hint{font-size:12px;color:var(--mut);margin-top:3px}
-.sum{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0}
-.sum div b{display:block;font-size:17px}
+.hint{font-size:12px;color:var(--mut);margin:3px 0 0 2px}
+.sum{display:flex;gap:22px;flex-wrap:wrap;margin:12px 0}
+.sum div b{display:block;font-size:18px;font-weight:700;letter-spacing:-.02em;color:var(--ink)}
 .empty{color:var(--mut);padding:14px 4px}
-a.lnk{color:var(--pri);cursor:pointer;text-decoration:underline}
+a.lnk{color:var(--pri);cursor:pointer;text-decoration:none}a.lnk:hover{text-decoration:underline}
+code{background:var(--fill);padding:1px 6px;border-radius:6px}
+/* to-do */
+.todo{display:flex;align-items:center;gap:12px;padding:10px 2px;border-bottom:.5px solid var(--line);transition:opacity .25s}
+.todo:last-child{border-bottom:0}
+.chk{flex:none;width:24px;height:24px;border-radius:50%;border:2px solid #c7c7cc;background:transparent;cursor:pointer;position:relative;padding:0;transition:background .18s,border-color .18s}
+.chk:hover{border-color:var(--pri)}
+.todo.done .chk{background:var(--pri);border-color:var(--pri)}
+.todo.done .chk::after{content:'';position:absolute;left:6.5px;top:2.5px;width:6px;height:11px;border:solid #fff;border-width:0 2.5px 2.5px 0;transform:rotate(45deg)}
+.todo.done .tt{text-decoration:line-through;color:var(--mut)}
+.todo.done{opacity:.7}
+.tb{flex:1;min-width:0;cursor:pointer}
+.tt{font-size:15px;overflow-wrap:anywhere}
+.tt .hi{color:#ff3b30;font-weight:800}
+.tm{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px}
+.chip{display:inline-block;padding:1px 9px;border-radius:99px;background:var(--fill);color:var(--mut);font-size:12px;font-weight:500}
+.chip.bad{background:var(--badBg);color:var(--bad)}.chip.today{background:var(--warnBg);color:var(--warn)}.chip.inv{background:var(--priBg);color:var(--pri);cursor:pointer}
+.x{flex:none;background:none;border:0;color:var(--mut);cursor:pointer;font-size:14px;padding:4px 8px;border-radius:8px;opacity:.5}
+.x:hover{opacity:1;background:var(--badBg);color:var(--bad)}
+.add{display:flex;gap:8px}
+.add input{font-size:16px;padding:11px 14px}
+.sug{display:flex;gap:10px;align-items:center;padding:8px 2px;border-bottom:.5px solid var(--line)}
+.sug:last-of-type{border-bottom:0}
+.sug .tt{flex:1;font-size:14px}
+@media (max-width:700px){
+ main{padding:14px 14px 96px}
+ header{padding:10px 14px}
+ nav{position:fixed;left:0;right:0;bottom:0;z-index:6;border-radius:0;justify-content:space-around;padding:6px 8px calc(8px + env(safe-area-inset-bottom));background:var(--glass);-webkit-backdrop-filter:saturate(180%) blur(22px);backdrop-filter:saturate(180%) blur(22px);border-top:.5px solid var(--line)}
+ nav button{flex:1;padding:8px 2px;font-size:12px;border-radius:10px;background:none!important;box-shadow:none!important;color:var(--mut)}
+ nav button.on{color:var(--pri);font-weight:700}
+ .two{grid-template-columns:1fr}
+ dialog{width:100vw;max-width:100vw;margin:auto 0 0;border-radius:18px 18px 0 0;max-height:94vh}
+ .kpi .v{font-size:22px}
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
@@ -107,15 +154,17 @@ const SEED_PRICES=[['ITR Filing','ITR-1'],['ITR Filing','ITR-2'],['ITR Filing','
 /* ---------- cloud storage (Supabase: Postgres + Auth + private Storage bucket) ---------- */
 const cfg=window.BILLING_CONFIG||{};
 const sb=(cfg.supabaseUrl&&!/YOUR_/.test(cfg.supabaseUrl)&&window.supabase)?supabase.createClient(cfg.supabaseUrl,cfg.supabaseAnonKey):null;
+let S={clients:[],pricing:[],invoices:[],todos:[],seq:1};
 const TABLES=['clients','pricing','invoices'];
 let snap={clients:{},pricing:{},invoices:{},seq:null},chain=Promise.resolve(),pending=0,signedIn=false;
 const setStat=(t,bad)=>{const e=document.getElementById('stat');if(e){e.textContent=t;e.style.color=bad?'var(--bad)':''}};
 async function load(){
- const res=await Promise.all([...TABLES.map(t=>sb.from(t).select('id,data')),sb.from('meta').select('data').eq('id','seq')]);
+ const res=await Promise.all([...TABLES.map(t=>sb.from(t).select('id,data')),sb.from('meta').select('data').eq('id','seq'),sb.from('meta').select('data').eq('id','todos')]);
  res.forEach(r=>{if(r.error)throw r.error});
- S={clients:[],pricing:[],invoices:[],seq:1};snap={clients:{},pricing:{},invoices:{}};
+ S={clients:[],pricing:[],invoices:[],todos:[],seq:1};snap={clients:{},pricing:{},invoices:{}};
  TABLES.forEach((t,k)=>res[k].data.forEach(r=>{S[t].push(r.data);snap[t][r.id]=JSON.stringify(r.data)}));
  const m=res[3].data[0];S.seq=m?m.data.n:1;snap.seq=S.seq;S.invoices.forEach(normInv);
+ const td=res[4].data[0];S.todos=td?td.data.items:[];snap.todos=JSON.stringify(S.todos);
  if(!S.pricing.length){S.pricing=SEED_PRICES.map(([service,type])=>({id:uid(),service,type,price:0}));await flush()}
  setStat('Synced');
 }
@@ -129,6 +178,7 @@ async function flush(){
   if(up.length){const{error}=await sb.from(t).upsert(up);if(error)throw error;up.forEach(r=>snap[t][r.id]=JSON.stringify(r.data))}
   if(del.length){const{error}=await sb.from(t).delete().in('id',del);if(error)throw error;del.forEach(id=>delete snap[t][id])}
  }
+ {const j=JSON.stringify(S.todos);if(snap.todos!==j){const{error}=await sb.from('meta').upsert({id:'todos',data:{items:S.todos}});if(error)throw error;snap.todos=j}}
  if(snap.seq!==S.seq){const{error}=await sb.from('meta').upsert({id:'seq',data:{n:S.seq}});if(error)throw error;snap.seq=S.seq}
  setStat('Saved to cloud');
 }
@@ -195,11 +245,13 @@ function bindFilters(){document.querySelectorAll('[data-f]').forEach(e=>e.onchan
 
 /* ---------- views ---------- */
 let TAB='dashboard';
-const TABS=[['dashboard','Dashboard'],['invoices','Invoices'],['clients','Clients'],['pricing','Pricing Master']];
+const TABS=[['dashboard','Dashboard'],['invoices','Invoices'],['todos','To-do'],['clients','Clients'],['pricing','Pricing']];
 function render(){
- $('#nav').innerHTML=TABS.map(([k,l])=>`<button class="${k===TAB?'on':''}" data-t="${k}">${l}</button>`).join('');
+ syncTodos();
+ const tn=S.todos.filter(t=>!t.done&&t.due&&t.due<=TODAY()).length;
+ $('#nav').innerHTML=TABS.map(([k,l])=>`<button class="${k===TAB?'on':''}" data-t="${k}">${l}${k==='todos'&&tn?`<span class="nb">${tn}</span>`:''}</button>`).join('');
  $('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{TAB=b.dataset.t;render()});
- ({dashboard:vDash,invoices:vInv,clients:vClients,pricing:vPricing})[TAB]();
+ ({dashboard:vDash,invoices:vInv,todos:vTodos,clients:vClients,pricing:vPricing})[TAB]();
  updRem();
 }
 function invTable(list,{showActions=true}={}){
@@ -400,6 +452,86 @@ function showReminders(force){
 $('#bRem').onclick=()=>showReminders(true);
 setInterval(()=>{if(signedIn){updRem();showReminders()}},3600e3);
 
+/* ---------- smart to-do ---------- */
+const MONS=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+const MONRE='january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec';
+const WDRE='sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tues|tue|wed|thurs|thur|thu|fri|sat';
+const mkDate=(d,m,y)=>{d=+d;m=+m;if(m<1||m>12||d<1||d>31)return '';const T=TODAY();let yy=y?(+y<100?2000+ +y:+y):+T.slice(0,4);
+ const f=yy=>`${yy}-${pad(m)}-${pad(d)}`;let r=f(yy);if(!y&&r<T)r=f(++yy);return new Date(Date.UTC(yy,m-1,d)).getUTCMonth()===m-1?r:''};
+/* "Call Ramesh tomorrow !" / "File GSTR-3B 20 oct" / "Follow up fri" -> {title,due,pri} */
+function parseTask(raw){
+ let t=' '+raw+' ',due='',pri=0;const T=TODAY();
+ const take=(re,fn)=>{const m=t.match(re);if(!m)return false;const v=fn(m);if(!v)return false;t=t.replace(m[0],' ');return true};
+ const D=v=>{if(v)due=v;return v};
+ take(/\s(!+|urgent|asap)(?=\s)/i,()=>{pri=1;return 1});
+ take(/\s(today|tonight)(?=\s)/i,()=>D(T))||
+ take(/\s(tomorrow|tmrw|tmr)(?=\s)/i,()=>D(addDays(T,1)))||
+ take(/\sin (\d{1,3}) days?(?=\s)/i,m=>D(addDays(T,+m[1])))||
+ take(/\snext week(?=\s)/i,()=>D(addDays(T,7)))||
+ take(new RegExp('\\s(\\d{1,2})(?:st|nd|rd|th)?[\\s-]+('+MONRE+')(?:[\\s-]+(\\d{4}))?(?=\\s)','i'),m=>D(mkDate(m[1],MONS.indexOf(m[2].slice(0,3).toLowerCase())+1,m[3])))||
+ take(new RegExp('\\s('+MONRE+')\\s+(\\d{1,2})(?:st|nd|rd|th)?(?=\\s)','i'),m=>D(mkDate(m[2],MONS.indexOf(m[1].slice(0,3).toLowerCase())+1)))||
+ take(/\s(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?=\s)/,m=>D(mkDate(m[1],m[2],m[3])))||
+ take(new RegExp('\\s(?:on |this |next )?('+WDRE+')(?=\\s)','i'),m=>{const w=['sun','mon','tue','wed','thu','fri','sat'].indexOf(m[1].slice(0,3).toLowerCase());
+  const cur=new Date(dnum(T)*864e5).getUTCDay();return D(addDays(T,((w-cur+7)%7)||7))});
+ let title=t.replace(/\s+(by|on|due on|due|before|at)\s*$/i,' ').replace(/\s+/g,' ').trim();
+ return {title:title||raw.trim(),due,pri};
+}
+const dueLabel=d=>d===TODAY()?'Today':d===addDays(TODAY(),1)?'Tomorrow':d===addDays(TODAY(),-1)?'Yesterday':fmtD(d);
+const newTodo=(o)=>({id:uid(),title:'',due:'',pri:0,invoiceId:'',done:false,createdAt:new Date().toISOString(),...o});
+/* tasks linked to an invoice complete themselves once that invoice is fully paid */
+function syncTodos(){let ch=false;S.todos.forEach(t=>{if(!t.done&&t.invoiceId){const i=S.invoices.find(x=>x.id===t.invoiceId);if(i&&remaining(i)<=0){t.done=true;t.auto=true;t.doneAt=new Date().toISOString();ch=true}}});if(ch&&signedIn)save()}
+function suggestions(){
+ const linked=new Set(S.todos.filter(t=>t.invoiceId&&(!t.done||(t.doneAt&&Date.now()-Date.parse(t.doneAt)<7*864e5))).map(t=>t.invoiceId));
+ return S.invoices.filter(i=>remaining(i)>0&&!linked.has(i.id)&&(overdueDays(i)>0||(i.createdAt&&ageDays(i)>=REMIND_DAYS)))
+  .sort((a,b)=>overdueDays(b)-overdueDays(a)||remaining(b)-remaining(a))}
+const sugTodo=i=>newTodo({title:`Follow up: ${client(i.clientId).name} — ${i.no} (${inr(remaining(i))}${overdueDays(i)?`, ${overdueDays(i)}d overdue`:''})`,due:TODAY(),pri:overdueDays(i)>=30?1:0,invoiceId:i.id});
+
+function vTodos(){
+ const T=TODAY(),open=S.todos.filter(t=>!t.done),done=S.todos.filter(t=>t.done).sort((a,b)=>(b.doneAt||'').localeCompare(a.doneAt||''));
+ const srt=(a,b)=>(+!!b.pri)-(+!!a.pri)||(a.due||'9').localeCompare(b.due||'9')||a.createdAt.localeCompare(b.createdAt);
+ const inv=t=>t.invoiceId&&S.invoices.find(i=>i.id===t.invoiceId);
+ const row=t=>{const i=inv(t),chips=[];
+  if(t.due&&!t.done)chips.push(`<span class="chip ${t.due<T?'bad':t.due===T?'today':''}">${esc(dueLabel(t.due))}</span>`);
+  if(i)chips.push(`<span class="chip inv" data-iv="${i.id}">${esc(i.no)} · ${esc(client(i.clientId).name)}${remaining(i)>0?' · '+inr(remaining(i))+' due':' · paid ✓'}</span>`);
+  if(t.auto)chips.push('<span class="chip">auto-completed: invoice paid</span>');
+  return `<div class="todo ${t.done?'done':''}" data-t="${t.id}"><button class="chk" data-c="${t.id}" aria-label="Toggle complete"></button><div class="tb" data-e="${t.id}"><div class="tt">${t.pri&&!t.done?'<span class="hi">!</span> ':''}${esc(t.title)}</div>${chips.length?`<div class="tm">${chips.join('')}</div>`:''}</div><button class="x" data-d="${t.id}" title="Delete">✕</button></div>`};
+ const grp=(label,list,cls)=>list.length?`<div class="card"><h2 class="${cls||''}">${label} <span class="mut" style="font-weight:500">${list.length}</span></h2>${list.sort(srt).map(row).join('')}</div>`:'';
+ const sug=suggestions(),shown=sug.slice(0,5);
+ $('#main').innerHTML=`<div class="grid" style="max-width:760px;margin:0 auto">
+ <div class="card"><div class="add"><input id="tIn" placeholder="Add a task…  e.g. “Call Ramesh tomorrow !”  or  “File GSTR-3B 20 oct”" autocomplete="off"><button class="btn" id="tAdd">Add</button></div>
+  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically.</div></div>
+ ${sug.length?`<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h2 style="margin:0">Suggested follow-ups <span class="mut" style="font-weight:500">${sug.length}</span></h2><button class="btn sec sm" id="sAll">Add all</button></div>
+  <div class="hint" style="margin:0 0 6px">Unpaid invoices that are overdue or 30+ days old and have no open task.</div>
+  ${shown.map(i=>`<div class="sug"><div class="tt">${esc(client(i.clientId).name)} <span class="mut">· ${esc(i.no)} · ${inr(remaining(i))}${overdueDays(i)?` · ${overdueDays(i)}d overdue`:''}</span></div><button class="btn sec sm" data-s="${i.id}">+ Task</button></div>`).join('')}
+  ${sug.length>shown.length?`<div class="hint">+ ${sug.length-shown.length} more — “Add all” creates a task for each.</div>`:''}</div>`:''}
+ ${grp('Overdue',open.filter(t=>t.due&&t.due<T),'bad')}${grp('Today',open.filter(t=>t.due===T))}${grp('Upcoming',open.filter(t=>t.due>T))}${grp('Anytime',open.filter(t=>!t.due))}
+ ${!open.length?'<div class="card empty" style="text-align:center">All clear ✓ — nothing to do.</div>':''}
+ ${done.length?`<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Completed <span class="mut" style="font-weight:500">${done.length}</span></h2><span><button class="btn sec sm" id="dTog">${lsGet('todo-done')==='1'?'Hide':'Show'}</button> <button class="btn dng sm" id="dClr">Clear</button></span></div>${lsGet('todo-done')==='1'?done.slice(0,50).map(row).join(''):''}</div>`:''}
+ </div>`;
+ const inp=$('#tIn'),hint=$('#tHint');
+ const add=()=>{const r=inp.value.trim();if(!r)return;const p=parseTask(r);S.todos.push(newTodo(p));save();render();$('#tIn').focus()};
+ inp.oninput=()=>{const r=inp.value.trim();if(!r){hint.textContent='Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it\'s picked up automatically.';return}
+  const p=parseTask(r);hint.textContent=`→ “${p.title}”${p.due?' · due '+dueLabel(p.due):' · no date'}${p.pri?' · high priority':''}`};
+ inp.onkeydown=e=>{if(e.key==='Enter')add()};$('#tAdd').onclick=add;
+ document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.c);const row=b.closest('.todo');row.classList.toggle('done');
+  setTimeout(()=>{t.done=!t.done;t.auto=false;t.doneAt=t.done?new Date().toISOString():'';save();render()},260)});
+ document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{S.todos=S.todos.filter(x=>x.id!==b.dataset.d);save();render()});
+ document.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>todoForm(b.dataset.e));
+ document.querySelectorAll('[data-iv]').forEach(b=>b.onclick=e=>{e.stopPropagation();openInvoice(b.dataset.iv)});
+ document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{S.todos.push(sugTodo(S.invoices.find(i=>i.id===b.dataset.s)));save();render()});
+ const sa=$('#sAll');if(sa)sa.onclick=()=>{if(sug.length>10&&!confirm(`Create ${sug.length} follow-up tasks?`))return;sug.forEach(i=>S.todos.push(sugTodo(i)));save();render()};
+ const dt=$('#dTog');if(dt)dt.onclick=()=>{lsSet('todo-done',lsGet('todo-done')==='1'?'0':'1');render()};
+ const dc=$('#dClr');if(dc)dc.onclick=()=>{if(confirm('Delete all completed tasks?')){S.todos=S.todos.filter(t=>!t.done);save();render()}};
+}
+function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;
+ show('Edit task',`<div class="f"><div class="full"><label>Task</label><input id="tT" value="${esc(t.title)}"></div>
+ <div><label>Due date</label><input type="date" id="tD" value="${t.due||''}"></div>
+ <div><label>Priority</label><select id="tP"><option value="0">Normal</option><option value="1" ${t.pri?'selected':''}>High</option></select></div>
+ <div class="full"><label>Linked invoice (optional)</label><select id="tI">${opts(S.invoices.slice().sort((a,b)=>b.no.localeCompare(a.no)).map(i=>[i.id,`${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due`]),t.invoiceId,'None')}</select></div></div>
+ <div class="row" style="margin-top:14px"><button class="btn" id="tS">Save</button><button class="btn dng" id="tX">Delete</button></div>`);
+ $('#tS').onclick=()=>{const v=$('#tT').value.trim();if(!v)return alert('Task cannot be empty');Object.assign(t,{title:v,due:$('#tD').value,pri:+$('#tP').value,invoiceId:$('#tI').value});save();dlg.close();render()};
+ $('#tX').onclick=()=>{S.todos=S.todos.filter(x=>x.id!==id);save();dlg.close();render()}}
+
 /* ---------- export / import / auth ---------- */
 $('#bExport').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download=`billing-export-${TODAY()}.json`;a.click()};
 $('#bImport').onclick=()=>$('#fImport').click();
@@ -410,6 +542,7 @@ $('#fImport').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(
   for(const inv of d.invoices)for(const p of inv.payments||[])if(p.proof&&p.proof.data){ /* legacy local backup: move proof into cloud storage */
    const blob=await (await fetch(p.proof.data)).blob();p.proof=await uploadBlob(blob,blob.type==='application/pdf'?'application/pdf':'image/jpeg',p.proof.name,inv.id,p.id)}
   d.invoices.forEach(normInv);
+  (d.todos||[]).forEach(x=>{if(!S.todos.some(y=>y.id===x.id))S.todos.push(x)});
   TABLES.forEach(t=>d[t].forEach(x=>{const k=S[t].findIndex(y=>y.id===x.id);k>=0?S[t][k]=x:S[t].push(x)}));
   S.seq=Math.max(S.seq,d.seq||1);await save();render()}catch(err){alert('Import failed or not a valid file'+(err&&err.message?': '+err.message:''))}};
 $('#bNew').onclick=()=>invoiceForm();
