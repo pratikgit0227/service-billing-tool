@@ -114,7 +114,7 @@ async function load(){
  res.forEach(r=>{if(r.error)throw r.error});
  S={clients:[],pricing:[],invoices:[],seq:1};snap={clients:{},pricing:{},invoices:{}};
  TABLES.forEach((t,k)=>res[k].data.forEach(r=>{S[t].push(r.data);snap[t][r.id]=JSON.stringify(r.data)}));
- const m=res[3].data[0];S.seq=m?m.data.n:1;snap.seq=S.seq;
+ const m=res[3].data[0];S.seq=m?m.data.n:1;snap.seq=S.seq;S.invoices.forEach(normInv);
  if(!S.pricing.length){S.pricing=SEED_PRICES.map(([service,type])=>({id:uid(),service,type,price:0}));await flush()}
  setStat('Synced');
 }
@@ -160,18 +160,21 @@ const received=i=>i.payments.reduce((a,p)=>a+Number(p.amount),0);
 const remaining=i=>Math.max(0,Number(i.amount)-received(i));
 const overdueDays=i=>remaining(i)>0&&i.dueDate&&i.dueDate<TODAY()?dnum(TODAY())-dnum(i.dueDate):0;
 function status(i){if(remaining(i)<=0)return'Paid';if(overdueDays(i)>0)return'Overdue';return received(i)>0?'Partial':'Pending'}
-const invFY=i=>i.details.fy||fyOf(i.invoiceDate);
+const svcLabel=i=>i.items.map(t=>t.type).join(" + ");
+const fyMatch=(i,fy)=>i.items.some(t=>(t.details.fy||fyOf(i.invoiceDate))===fy);
+/* legacy single-service invoices -> one line item */
+function normInv(i){if(!i.items){i.items=[{id:i.id+'-1',service:i.service,type:i.type,details:i.details||{},amount:i.amount}];delete i.service;delete i.type;delete i.details}return i}
 const client=id=>S.clients.find(c=>c.id===id)||{name:'(deleted)'};
 const typesFor=svc=>S.pricing.filter(p=>p.service===svc).map(p=>p.type);
 const priceFor=(svc,type)=>(S.pricing.find(p=>p.service===svc&&p.type===type)||{}).price;
-function detailText(i){const d=i.details,out=[];if(d.period)out.push(fmtM(d.period));if(d.fy)out.push('FY '+d.fy);if(d.licenseType)out.push(d.licenseType);if(d.property)out.push(d.property);if(d.txnDate)out.push('Txn '+fmtD(d.txnDate));return out.join(' · ')}
+function detailText(t){const d=t.details,out=[];if(d.period)out.push(fmtM(d.period));if(d.fy)out.push('FY '+d.fy);if(d.licenseType)out.push(d.licenseType);if(d.property)out.push(d.property);if(d.txnDate)out.push('Txn '+fmtD(d.txnDate));return out.join(' · ')}
 const opts=(arr,sel,blank)=>(blank!==undefined?`<option value="">${esc(blank)}</option>`:'')+arr.map(o=>{const v=Array.isArray(o)?o[0]:o,l=Array.isArray(o)?o[1]:o;return `<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(l)}</option>`}).join('');
 
 /* ---------- filters ---------- */
 let F={client:'',service:'',fy:'',month:'',status:'',invFrom:'',invTo:'',dueFrom:'',dueTo:''};
 function filtered(){return S.invoices.filter(i=>{
- if(F.client&&i.clientId!==F.client)return false;if(F.service&&i.service!==F.service)return false;
- if(F.fy&&invFY(i)!==F.fy)return false;if(F.month&&!i.invoiceDate.startsWith(F.month))return false;
+ if(F.client&&i.clientId!==F.client)return false;if(F.service&&!i.items.some(t=>t.service===F.service))return false;
+ if(F.fy&&!fyMatch(i,F.fy))return false;if(F.month&&!i.invoiceDate.startsWith(F.month))return false;
  if(F.status&&status(i)!==F.status)return false;
  if(F.invFrom&&i.invoiceDate<F.invFrom)return false;if(F.invTo&&i.invoiceDate>F.invTo)return false;
  if(F.dueFrom&&i.dueDate<F.dueFrom)return false;if(F.dueTo&&i.dueDate>F.dueTo)return false;return true})}
@@ -201,7 +204,7 @@ function invTable(list,{showActions=true}={}){
  if(!list.length)return '<div class="empty">No invoices match.</div>';
  return `<div class="tw"><table><thead><tr><th>Invoice</th><th>Client</th><th>Service</th><th>Inv. date</th><th class="n">Amount</th><th class="n">Received</th><th class="n">Due amt</th><th>Due date</th><th class="n">Overdue days</th><th>Status</th></tr></thead><tbody>`+
  list.map(i=>{const st=status(i),od=overdueDays(i);return `<tr class="click" data-i="${i.id}"><td>${esc(i.no)}</td><td>${esc(client(i.clientId).name)}</td>
- <td class="w"><b>${esc(i.service)}</b> · ${esc(i.type)}<div class="mut sm">${esc(detailText(i))}</div></td><td>${fmtD(i.invoiceDate)}</td>
+ <td class="w">${i.items.map(t=>`<div><b>${esc(t.service)}</b> · ${esc(t.type)}<div class="mut sm">${esc(detailText(t))}</div></div>`).join('')}</td><td>${fmtD(i.invoiceDate)}</td>
  <td class="n">${inr(i.amount)}</td><td class="n">${inr(received(i))}</td><td class="n">${inr(remaining(i))}</td><td>${fmtD(i.dueDate)}</td>
  <td class="n">${od?`<b style="color:var(--bad)">${od}</b>`:'—'}</td><td><span class="badge b-${st}">${STATUS_LABEL[st]}</span></td></tr>`}).join('')+'</tbody></table></div>';
 }
@@ -216,16 +219,16 @@ function vDash(){
  const pays=L.flatMap(i=>i.payments.map(p=>({...p,i}))).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,8);
  const k=(l,v,c='')=>`<div class="card kpi ${c}"><div class="l">${l}</div><div class="v">${v}</div></div>`;
  $('#main').innerHTML=filterBar()+`<div class="grid kpis">
- ${k('Total Clients',clientsN)}${k('Services Sold',L.length)}${k('Total Invoice Value',inr(sum(i=>+i.amount)))}
+ ${k('Total Clients',clientsN)}${k('Services Sold',L.reduce((a,i)=>a+i.items.length,0))}${k('Total Invoice Value',inr(sum(i=>+i.amount)))}
  ${k('Payments Received',inr(sum(received)),'ok')}${k('Total Outstanding',inr(sum(remaining)),'warn')}
  ${k('Total Overdue',inr(od.reduce((a,i)=>a+remaining(i),0)),'bad')}
  ${k('Pending Payments (not yet due)',pend.length)}${k('Overdue Payments',od.length,'bad')}
  ${k('Due Today',dueToday.length+' · '+inr(dueToday.reduce((a,i)=>a+remaining(i),0)))}
  ${k('Due in next 7 days',dueWeek.length+' · '+inr(dueWeek.reduce((a,i)=>a+remaining(i),0)))}</div>
  <div class="grid two">
- <div class="card"><h2>Overdue payments</h2>${od.length?`<div class="tw"><table><thead><tr><th>Client</th><th>Invoice</th><th class="n">Due amt</th><th>Due date</th><th class="n">Days</th></tr></thead><tbody>`+od.sort((a,b)=>overdueDays(b)-overdueDays(a)).map(i=>`<tr class="click" data-i="${i.id}"><td>${esc(client(i.clientId).name)}</td><td>${esc(i.no)} · ${esc(i.type)}</td><td class="n">${inr(remaining(i))}</td><td>${fmtD(i.dueDate)}</td><td class="n"><b style="color:var(--bad)">${overdueDays(i)}</b></td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">Nothing overdue.</div>'}</div>
- <div class="card"><h2>Due today / this week</h2>${(dueToday.length+dueWeek.length)?`<div class="tw"><table><thead><tr><th>Client</th><th>Invoice</th><th class="n">Due amt</th><th>Due date</th></tr></thead><tbody>`+[...dueToday,...dueWeek].map(i=>`<tr class="click" data-i="${i.id}"><td>${esc(client(i.clientId).name)}</td><td>${esc(i.no)} · ${esc(i.type)}</td><td class="n">${inr(remaining(i))}</td><td>${i.dueDate===T?'<b>Today</b>':fmtD(i.dueDate)}</td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">Nothing due in the next 7 days.</div>'}</div>
- <div class="card" style="grid-column:1/-1"><h2>Recent payments</h2>${pays.length?`<div class="tw"><table><thead><tr><th>Date</th><th>Client</th><th>Invoice</th><th>Mode</th><th class="n">Amount</th><th>Proof</th></tr></thead><tbody>`+pays.map(p=>`<tr class="click" data-i="${p.i.id}"><td>${fmtD(p.date)}</td><td>${esc(client(p.i.clientId).name)}</td><td>${esc(p.i.no)} · ${esc(p.i.type)}</td><td>${esc(p.mode)}</td><td class="n">${inr(p.amount)}</td><td>${p.proof?'✔':'—'}</td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">No payments recorded yet.</div>'}</div>
+ <div class="card"><h2>Overdue payments</h2>${od.length?`<div class="tw"><table><thead><tr><th>Client</th><th>Invoice</th><th class="n">Due amt</th><th>Due date</th><th class="n">Days</th></tr></thead><tbody>`+od.sort((a,b)=>overdueDays(b)-overdueDays(a)).map(i=>`<tr class="click" data-i="${i.id}"><td>${esc(client(i.clientId).name)}</td><td>${esc(i.no)} · ${esc(svcLabel(i))}</td><td class="n">${inr(remaining(i))}</td><td>${fmtD(i.dueDate)}</td><td class="n"><b style="color:var(--bad)">${overdueDays(i)}</b></td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">Nothing overdue.</div>'}</div>
+ <div class="card"><h2>Due today / this week</h2>${(dueToday.length+dueWeek.length)?`<div class="tw"><table><thead><tr><th>Client</th><th>Invoice</th><th class="n">Due amt</th><th>Due date</th></tr></thead><tbody>`+[...dueToday,...dueWeek].map(i=>`<tr class="click" data-i="${i.id}"><td>${esc(client(i.clientId).name)}</td><td>${esc(i.no)} · ${esc(svcLabel(i))}</td><td class="n">${inr(remaining(i))}</td><td>${i.dueDate===T?'<b>Today</b>':fmtD(i.dueDate)}</td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">Nothing due in the next 7 days.</div>'}</div>
+ <div class="card" style="grid-column:1/-1"><h2>Recent payments</h2>${pays.length?`<div class="tw"><table><thead><tr><th>Date</th><th>Client</th><th>Invoice</th><th>Mode</th><th class="n">Amount</th><th>Proof</th></tr></thead><tbody>`+pays.map(p=>`<tr class="click" data-i="${p.i.id}"><td>${fmtD(p.date)}</td><td>${esc(client(p.i.clientId).name)}</td><td>${esc(p.i.no)} · ${esc(svcLabel(p.i))}</td><td>${esc(p.mode)}</td><td class="n">${inr(p.amount)}</td><td>${p.proof?'✔':'—'}</td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">No payments recorded yet.</div>'}</div>
  </div>`;
  bindFilters();bindRows();
 }
@@ -251,7 +254,7 @@ function vPricing(){
  $('#main').innerHTML=`<p class="mut" style="margin-top:0">Prices (₹) set here are auto-picked when creating an invoice. They can be overridden per invoice. Add your own sub-services (e.g. extra Tax Planning types) with the + button.</p><div class="grid two">${groups}</div>`;
  document.querySelectorAll('[data-pp]').forEach(e=>e.onchange=()=>{S.pricing.find(p=>p.id===e.dataset.pp).price=+e.value||0;save()});
  document.querySelectorAll('[data-pn]').forEach(e=>e.onchange=()=>{const p=S.pricing.find(p=>p.id===e.dataset.pn),old=p.type,nw=e.value.trim();if(!nw){e.value=old;return}
-  S.invoices.forEach(i=>{if(i.service===p.service&&i.type===old)i.type=nw});p.type=nw;save()});
+  S.invoices.forEach(i=>i.items.forEach(t=>{if(t.service===p.service&&t.type===old)t.type=nw}));p.type=nw;save()});
  document.querySelectorAll('[data-pd]').forEach(b=>b.onclick=()=>{if(confirm('Remove this price entry? Existing invoices keep their type and amount.')){S.pricing=S.pricing.filter(p=>p.id!==b.dataset.pd);save();render()}});
  document.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{const n=prompt('Name:');if(n&&n.trim()){S.pricing.push({id:uid(),service:b.dataset.add,type:n.trim(),price:0});save();render()}});
 }
@@ -273,48 +276,60 @@ function clientForm(id,after){
 
 function invoiceForm(id,preset){
  const ex=S.invoices.find(i=>i.id===id);
- const cur=ex||{clientId:preset?.clientId||'',service:'ITR Filing',type:'',details:{},invoiceDate:TODAY(),dueDate:addDays(TODAY(),15),amount:'',notes:''};
  if(!S.clients.length){show('New invoice','<p>Add a client first.</p><button class="btn" id="ac">+ Add client</button>');$('#ac').onclick=()=>clientForm(null,()=>invoiceForm());return}
- let priceTouched=!!ex;
+ const cur=ex||{clientId:preset?.clientId||'',invoiceDate:TODAY(),dueDate:addDays(TODAY(),15),notes:''};
+ const blank=()=>({id:uid(),service:'ITR Filing',type:'',details:{},amount:'',touched:false});
+ let items=ex?ex.items.map(t=>({id:t.id||uid(),service:t.service,type:t.type,details:{...t.details},amount:t.amount,touched:true})):[blank()];
  show(ex?'Edit invoice '+ex.no:'New invoice',`<div class="f">
  <div><label>Client *</label><div class="row" style="flex-wrap:nowrap"><select id="iC">${opts(S.clients.map(c=>[c.id,c.name]),cur.clientId,'Select client…')}</select><button class="btn sec sm" id="iAC" type="button">+ New</button></div></div>
- <div><label>Type of service *</label><select id="iS">${opts(Object.keys(SERVICES),cur.service)}</select></div>
- <div><label id="iTL"></label><select id="iT"></select></div>
- <span id="iX" style="display:contents"></span>
  <div><label>Invoice date *</label><input type="date" id="iD" value="${cur.invoiceDate}"></div>
- <div><label>Payment due date *</label><input type="date" id="iDue" value="${cur.dueDate}"></div>
- <div><label>Invoice amount (₹) *</label><input type="number" min="0" step="1" id="iA" value="${cur.amount}"><div class="hint" id="iAH"></div></div>
- <div class="full"><label>Notes / remarks</label><textarea id="iN" rows="2">${esc(cur.notes)}</textarea></div></div>
+ <div><label>Payment due date *</label><input type="date" id="iDue" value="${cur.dueDate}"></div></div>
+ <h2 style="margin-top:16px">Services on this invoice</h2>
+ <div id="iItems"></div>
+ <div class="row" style="margin:4px 0 12px"><button class="btn sec sm" id="iAdd" type="button">+ Add another service</button><span class="sp"></span><b>Invoice total: <span id="iTot"></span></b></div>
+ <div class="f"><div class="full"><label>Notes / remarks</label><textarea id="iN" rows="2">${esc(cur.notes)}</textarea></div></div>
  <div class="row" style="margin-top:14px"><button class="btn" id="iSave">${ex?'Save changes':'Create invoice'}</button></div>`);
- const x=cur.details;
- const drawExtra=()=>{const svc=$('#iS').value;$('#iTL').textContent=SERVICES[svc].typeLabel+' *';
-  const ts=typesFor(svc);const sel=ts.includes(cur.type)?cur.type:(ts[0]||'');$('#iT').innerHTML=opts(ts,sel);cur.type=$('#iT').value;
-  $('#iX').innerHTML=SERVICES[svc].extra.map(f=>{const v=x[f.k]??(f.k==='fy'&&f.req?fyOf(TODAY()):'');const lb=`<label>${f.l}${f.req?' *':''}</label>`;
+ const hintFor=t=>{const p=priceFor(t.service,t.type);return p?`Pricing Master: ${inr(p)}${+t.amount!==p?' (overridden)':''}`:'No price set in Pricing Master — enter manually'};
+ const updTot=()=>{$('#iTot').textContent=inr(items.reduce((a,t)=>a+(+t.amount||0),0))};
+ const itemHTML=(t,k)=>{const sv=SERVICES[t.service],ts=typesFor(t.service);
+  if(!ts.includes(t.type))t.type=ts[0]||'';
+  const p=priceFor(t.service,t.type);if(!t.touched&&p!==undefined)t.amount=p||'';
+  const extra=sv.extra.map(f=>{let v=t.details[f.k];if(v===undefined){v=f.k==='fy'&&f.req?fyOf(TODAY()):'';if(v)t.details[f.k]=v}v=v||'';
+   const lb=`<label>${f.l}${f.req?' *':''}</label>`;
    if(f.kind==='fy')return `<div>${lb}<select data-x="fy">${opts(FYS,v,f.req?undefined:'—')}</select></div>`;
    if(f.kind==='select')return `<div>${lb}<select data-x="${f.k}">${opts(f.opts,v)}</select></div>`;
    if(f.kind==='textarea')return `<div class="full">${lb}<textarea data-x="${f.k}" rows="2">${esc(v)}</textarea></div>`;
    return `<div>${lb}<input type="${f.kind}" data-x="${f.k}" value="${esc(v)}"></div>`}).join('');
-  const pm=$('#iX').querySelector('[data-x="period"]'),fy=$('#iX').querySelector('[data-x="fy"]');
-  if(pm&&fy)pm.onchange=()=>{if(pm.value)fy.value=fyFromMonth(pm.value)};
-  pickPrice()};
- const pickPrice=()=>{const p=priceFor($('#iS').value,$('#iT').value);
-  if(!priceTouched&&p!==undefined)$('#iA').value=p||'';
-  $('#iAH').textContent=p?`Pricing Master: ${inr(p)}${+$('#iA').value!==p?' (overridden)':''}`:'No price set in Pricing Master — enter manually';};
- $('#iS').onchange=()=>{cur.type='';priceTouched=false;drawExtra()};
- $('#iT').onchange=()=>{cur.type=$('#iT').value;priceTouched=false;pickPrice()};
- $('#iA').oninput=()=>{priceTouched=true;pickPrice()};
+  return `<div class="card" style="margin-bottom:10px" data-k="${k}"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>Service ${k+1}</b>${items.length>1?`<button class="btn dng sm" data-rm="${k}" type="button">Remove</button>`:''}</div><div class="f">
+   <div><label>Type of service *</label><select data-s="service">${opts(Object.keys(SERVICES),t.service)}</select></div>
+   <div><label>${sv.typeLabel} *</label><select data-s="type">${opts(ts,t.type)}</select></div>
+   ${extra}
+   <div><label>Amount (₹) *</label><input type="number" min="0" step="1" data-s="amount" value="${t.amount}"><div class="hint">${esc(hintFor(t))}</div></div></div></div>`};
+ const draw=()=>{$('#iItems').innerHTML=items.map(itemHTML).join('');updTot()};
+ const box=$('#iItems');
+ box.onchange=e=>{const el=e.target,k=+el.closest('[data-k]').dataset.k,t=items[k];
+  if(el.dataset.s==='service'){t.service=el.value;t.type='';t.details={};t.touched=false;draw()}
+  else if(el.dataset.s==='type'){t.type=el.value;t.touched=false;draw()}
+  else if(el.dataset.x){t.details[el.dataset.x]=el.value.trim();
+   if(el.dataset.x==='period'&&el.value&&SERVICES[t.service].extra.some(f=>f.k==='fy')){t.details.fy=fyFromMonth(el.value);draw()}}};
+ box.oninput=e=>{const el=e.target;if(el.dataset.s!=='amount')return;const k=+el.closest('[data-k]').dataset.k,t=items[k];
+  t.amount=el.value;t.touched=true;el.nextElementSibling.textContent=hintFor(t);updTot()};
+ box.onclick=e=>{const b=e.target.closest('[data-rm]');if(b){items.splice(+b.dataset.rm,1);draw()}};
+ $('#iAdd').onclick=()=>{items.push(blank());draw()};
  $('#iD').onchange=()=>{if(!ex)$('#iDue').value=addDays($('#iD').value,15)};
- $('#iAC').onclick=()=>clientForm(null,cid=>{cur.clientId=cid;invoiceForm(id,{clientId:cid})});
- drawExtra();
+ $('#iAC').onclick=()=>clientForm(null,cid=>{invoiceForm(id,{clientId:cid})});
+ draw();
  $('#iSave').onclick=()=>{
-  const svc=$('#iS').value,details={};let bad='';
-  $('#iX').querySelectorAll('[data-x]').forEach(e=>{details[e.dataset.x]=e.value.trim()});
-  SERVICES[svc].extra.forEach(f=>{if(f.req&&!details[f.k])bad=f.l});
-  if(svc==='GST Filing'&&['GSTR-1','GSTR-3B'].includes($('#iT').value)&&!details.period)bad='Month / Return Period';
-  if(!$('#iC').value)bad='Client';if(!$('#iT').value)bad=SERVICES[svc].typeLabel+' (add one in Pricing Master)';
-  if(!$('#iD').value)bad='Invoice date';if(!$('#iDue').value)bad='Due date';if(!($('#iA').value!==''&&+$('#iA').value>=0))bad='Invoice amount';
+  let bad='';
+  if(!$('#iC').value)bad='Client';if(!$('#iD').value)bad='Invoice date';if(!$('#iDue').value)bad='Due date';
+  items.forEach((t,k)=>{const w='Service '+(k+1)+': ';
+   if(!t.type)bad=w+SERVICES[t.service].typeLabel+' (add one in Pricing Master)';
+   SERVICES[t.service].extra.forEach(f=>{if(f.req&&!t.details[f.k])bad=w+f.l});
+   if(t.service==='GST Filing'&&['GSTR-1','GSTR-3B'].includes(t.type)&&!t.details.period)bad=w+'Month / Return Period';
+   if(t.amount===''||!(+t.amount>=0))bad=w+'Amount'});
   if(bad)return alert('Please fill: '+bad);
-  const data={clientId:$('#iC').value,service:svc,type:$('#iT').value,details,invoiceDate:$('#iD').value,dueDate:$('#iDue').value,amount:+$('#iA').value,notes:$('#iN').value};
+  const list=items.map(({touched,...t})=>({...t,amount:+t.amount}));
+  const data={clientId:$('#iC').value,invoiceDate:$('#iD').value,dueDate:$('#iDue').value,items:list,amount:list.reduce((a,t)=>a+t.amount,0),notes:$('#iN').value};
   if(ex){Object.assign(ex,data);save();dlg.close();render();openInvoice(ex.id)}
   else{S.seq=Math.max(S.seq,...S.invoices.map(x=>(+x.no.replace(/\D/g,'')||0)+1));const inv={id:uid(),no:'INV-'+String(S.seq++).padStart(4,'0'),payments:[],...data};S.invoices.push(inv);save();dlg.close();render();openInvoice(inv.id)}
  };
@@ -327,7 +342,7 @@ function openInvoice(id){
  show(`${i.no} · ${client(i.clientId).name}`,`
  <div class="row"><span class="badge b-${st}">${STATUS_LABEL[st]}</span>${od?`<b style="color:var(--bad)">${od} day${od>1?'s':''} overdue</b>`:''}<span class="sp"></span>
   <button class="btn sec sm" id="oE">Edit invoice</button><button class="btn dng sm" id="oD">Delete</button></div>
- <p style="margin:10px 0 0"><b>${esc(i.service)} · ${esc(i.type)}</b><br><span class="mut">${esc(detailText(i))||''}</span></p>
+ <div class="tw" style="margin-top:10px"><table><thead><tr><th>Service</th><th>Details</th><th class="n">Amount</th></tr></thead><tbody>${i.items.map(t=>`<tr><td><b>${esc(t.service)}</b> · ${esc(t.type)}</td><td class="w mut">${esc(detailText(t))}</td><td class="n">${inr(t.amount)}</td></tr>`).join('')}</tbody></table></div>
  <div class="sum"><div class="mut">Invoice date<b>${fmtD(i.invoiceDate)}</b></div><div class="mut">Due date<b>${fmtD(i.dueDate)}</b></div>
   <div class="mut">Invoice amount<b>${inr(i.amount)}</b></div><div class="mut">Total received<b style="color:var(--ok)">${inr(received(i))}</b></div><div class="mut">Remaining due<b style="color:${remaining(i)?'var(--bad)':'var(--ok)'}">${inr(remaining(i))}</b></div></div>
  ${i.notes?`<p class="sm mut">Notes: ${esc(i.notes)}</p>`:''}
@@ -373,6 +388,7 @@ $('#fImport').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(
   setStat('Importing…');
   for(const inv of d.invoices)for(const p of inv.payments||[])if(p.proof&&p.proof.data){ /* legacy local backup: move proof into cloud storage */
    const blob=await (await fetch(p.proof.data)).blob();p.proof=await uploadBlob(blob,blob.type==='application/pdf'?'application/pdf':'image/jpeg',p.proof.name,inv.id,p.id)}
+  d.invoices.forEach(normInv);
   TABLES.forEach(t=>d[t].forEach(x=>{const k=S[t].findIndex(y=>y.id===x.id);k>=0?S[t][k]=x:S[t].push(x)}));
   S.seq=Math.max(S.seq,d.seq||1);await save();render()}catch(err){alert('Import failed or not a valid file'+(err&&err.message?': '+err.message:''))}};
 $('#bNew').onclick=()=>invoiceForm();
