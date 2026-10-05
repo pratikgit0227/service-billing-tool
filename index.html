@@ -190,7 +190,7 @@ async function uploadBlob(blob,type,name,invId,pid){
 async function uploadProof(f,invId,pid){
  if(f.type==='application/pdf'){if(f.size>10e6)throw new Error('PDF is over 10 MB');return uploadBlob(f,'application/pdf',f.name,invId,pid)}
  return uploadBlob(await compressImage(f),'image/jpeg',f.name,invId,pid)}
-const removeProofs=paths=>{paths=paths.filter(Boolean);if(paths.length)sb.storage.from(BUCKET).remove(paths).catch(()=>{})};
+const removeProofs=paths=>{paths=paths.filter(Boolean);try{if(sb&&paths.length)sb.storage.from(BUCKET).remove(paths).catch(()=>{})}catch{}};
 
 /* ---------- helpers ---------- */
 const $=s=>document.querySelector(s), dlg=$('#dlg');
@@ -493,13 +493,14 @@ function vTodos(){
  const row=t=>{const i=inv(t),chips=[];
   if(t.due&&!t.done)chips.push(`<span class="chip ${t.due<T?'bad':t.due===T?'today':''}">${esc(dueLabel(t.due))}</span>`);
   if(i)chips.push(`<span class="chip inv" data-iv="${i.id}">${esc(i.no)} · ${esc(client(i.clientId).name)}${remaining(i)>0?' · '+inr(remaining(i))+' due':' · paid ✓'}</span>`);
+  if((t.attachments||[]).length)chips.push(`<span class="chip inv" data-at="${t.id}">📎 ${t.attachments.length}</span>`);
   if(t.auto)chips.push('<span class="chip">auto-completed: invoice paid</span>');
   return `<div class="todo ${t.done?'done':''}" data-t="${t.id}"><button class="chk" data-c="${t.id}" aria-label="Toggle complete"></button><div class="tb" data-e="${t.id}"><div class="tt">${t.pri&&!t.done?'<span class="hi">!</span> ':''}${esc(t.title)}</div>${chips.length?`<div class="tm">${chips.join('')}</div>`:''}</div><button class="x" data-d="${t.id}" title="Delete">✕</button></div>`};
  const grp=(label,list,cls)=>list.length?`<div class="card"><h2 class="${cls||''}">${label} <span class="mut" style="font-weight:500">${list.length}</span></h2>${list.sort(srt).map(row).join('')}</div>`:'';
  const sug=suggestions(),shown=sug.slice(0,5);
  $('#main').innerHTML=`<div class="grid" style="max-width:760px;margin:0 auto">
- <div class="card"><div class="add"><input id="tIn" placeholder="Add a task…  e.g. “Call Ramesh tomorrow !”  or  “File GSTR-3B 20 oct”" autocomplete="off"><button class="btn" id="tAdd">Add</button></div>
-  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically.</div></div>
+ <div class="card"><div class="add"><input id="tIn" placeholder="Add a task…  e.g. “Call Ramesh tomorrow !”  or  “File GSTR-3B 20 oct”" autocomplete="off"><button class="btn sec" id="tClip" title="Attach screenshot / PDF (or paste with Ctrl+V)">📎</button><input type="file" id="tFile" accept="image/*,application/pdf" multiple hidden><button class="btn" id="tAdd">Add</button></div><div class="tm" id="tDA" style="margin-top:6px"></div>
+  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically. Paste a screenshot with Ctrl+V to attach it.</div></div>
  ${sug.length?`<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h2 style="margin:0">Suggested follow-ups <span class="mut" style="font-weight:500">${sug.length}</span></h2><button class="btn sec sm" id="sAll">Add all</button></div>
   <div class="hint" style="margin:0 0 6px">Unpaid invoices that are overdue or 30+ days old and have no open task.</div>
   ${shown.map(i=>`<div class="sug"><div class="tt">${esc(client(i.clientId).name)} <span class="mut">· ${esc(i.no)} · ${inr(remaining(i))}${overdueDays(i)?` · ${overdueDays(i)}d overdue`:''}</span></div><button class="btn sec sm" data-s="${i.id}">+ Task</button></div>`).join('')}
@@ -509,28 +510,60 @@ function vTodos(){
  ${done.length?`<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Completed <span class="mut" style="font-weight:500">${done.length}</span></h2><span><button class="btn sec sm" id="dTog">${lsGet('todo-done')==='1'?'Hide':'Show'}</button> <button class="btn dng sm" id="dClr">Clear</button></span></div>${lsGet('todo-done')==='1'?done.slice(0,50).map(row).join(''):''}</div>`:''}
  </div>`;
  const inp=$('#tIn'),hint=$('#tHint');
- const add=()=>{const r=inp.value.trim();if(!r)return;const p=parseTask(r);S.todos.push(newTodo(p));save();render();$('#tIn').focus()};
+ const add=()=>{const r=inp.value.trim();if(!r)return;const p=parseTask(r);S.todos.push(newTodo({...p,id:tdraft.id,attachments:tdraft.atts}));tdraft={id:uid(),atts:[]};save();render();$('#tIn').focus()};
  inp.oninput=()=>{const r=inp.value.trim();if(!r){hint.textContent='Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it\'s picked up automatically.';return}
   const p=parseTask(r);hint.textContent=`→ “${p.title}”${p.due?' · due '+dueLabel(p.due):' · no date'}${p.pri?' · high priority':''}`};
  inp.onkeydown=e=>{if(e.key==='Enter')add()};$('#tAdd').onclick=add;
+ const drawDraft=()=>{$('#tDA').innerHTML=tdraft.atts.map(a=>`<span class="chip inv">📎 ${esc(a.name)} <span data-xd="${a.id}" style="cursor:pointer;margin-left:4px">✕</span></span>`).join('');
+  document.querySelectorAll('[data-xd]').forEach(x=>x.onclick=()=>{const k=tdraft.atts.findIndex(a=>a.id===x.dataset.xd);removeProofs([tdraft.atts[k].path]);tdraft.atts.splice(k,1);drawDraft()})};
+ drawDraft();pasteTarget=files=>attachFiles(files,tdraft.id,tdraft.atts,drawDraft);
+ $('#tClip').onclick=()=>$('#tFile').click();$('#tFile').onchange=e=>{attachFiles([...e.target.files],tdraft.id,tdraft.atts,drawDraft);e.target.value=''};
  document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.c);const row=b.closest('.todo');row.classList.toggle('done');
   setTimeout(()=>{t.done=!t.done;t.auto=false;t.doneAt=t.done?new Date().toISOString():'';save();render()},260)});
- document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{S.todos=S.todos.filter(x=>x.id!==b.dataset.d);save();render()});
+ document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.d);removeProofs((t.attachments||[]).map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==b.dataset.d);save();render()});
  document.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>todoForm(b.dataset.e));
+ document.querySelectorAll('[data-at]').forEach(b=>b.onclick=e=>{e.stopPropagation();viewAtts(b.dataset.at)});
  document.querySelectorAll('[data-iv]').forEach(b=>b.onclick=e=>{e.stopPropagation();openInvoice(b.dataset.iv)});
  document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{S.todos.push(sugTodo(S.invoices.find(i=>i.id===b.dataset.s)));save();render()});
  const sa=$('#sAll');if(sa)sa.onclick=()=>{if(sug.length>10&&!confirm(`Create ${sug.length} follow-up tasks?`))return;sug.forEach(i=>S.todos.push(sugTodo(i)));save();render()};
  const dt=$('#dTog');if(dt)dt.onclick=()=>{lsSet('todo-done',lsGet('todo-done')==='1'?'0':'1');render()};
- const dc=$('#dClr');if(dc)dc.onclick=()=>{if(confirm('Delete all completed tasks?')){S.todos=S.todos.filter(t=>!t.done);save();render()}};
+ const dc=$('#dClr');if(dc)dc.onclick=()=>{if(confirm('Delete all completed tasks?')){S.todos.filter(t=>t.done).forEach(t=>removeProofs((t.attachments||[]).map(a=>a.path)));S.todos=S.todos.filter(t=>!t.done);save();render()}};
 }
-function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;
+/* attachments on tasks: stored in the private "proofs" bucket under todo-<id>/ */
+let tdraft={id:uid(),atts:[]},editTodoId=null,pasteTarget=null;
+async function attachFiles(files,tid,list,after){
+ for(const f of files){
+  if(!(f.type.startsWith('image/')||f.type==='application/pdf')){alert('Only images and PDFs can be attached: '+f.name);continue}
+  try{setStat('Uploading…');const aid=uid(),r=await uploadProof(f,'todo-'+tid,aid);
+   list.push({id:aid,name:(f.name&&!/^image\.(png|jpe?g)$/i.test(f.name))?f.name:'Screenshot '+new Date().toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}),path:r.path})}
+  catch(e){alert('Upload failed: '+(e.message||e))}}
+ setStat('Saved to cloud');after()}
+document.addEventListener('paste',e=>{const files=[...(e.clipboardData?.files||[])].filter(f=>f.type.startsWith('image/')||f.type==='application/pdf');if(!files.length)return;
+ if(dlg.open&&editTodoId){e.preventDefault();const t=S.todos.find(x=>x.id===editTodoId);t.attachments=t.attachments||[];attachFiles(files,t.id,t.attachments,()=>{save();todoAtt&&todoAtt()})}
+ else if(!dlg.open&&TAB==='todos'&&pasteTarget){e.preventDefault();pasteTarget(files)}});
+dlg.addEventListener('close',()=>{editTodoId=null;todoAtt=null});
+let todoAtt=null;
+async function viewAtts(tid,only){
+ const t=S.todos.find(x=>x.id===tid);if(!t)return;editTodoId=null;todoAtt=null;const list=(t.attachments||[]).filter(a=>!only||a.id===only);
+ const urls=await Promise.all(list.map(a=>sb.storage.from(BUCKET).createSignedUrl(a.path,600)));
+ show('Attachments — '+t.title,(only?'<button class="btn sec sm" id="aBk" style="margin-bottom:10px">← Back to task</button>':'')+list.map((a,k)=>{const u=urls[k].data?.signedUrl;if(!u)return `<p class="mut">${esc(a.name)}: could not load</p>`;
+  return a.path.endsWith('.pdf')?`<p><a class="lnk" href="${u}" target="_blank" rel="noopener">📄 ${esc(a.name)} (open PDF)</a></p>`:`<p class="mut sm" style="margin:0 0 4px">${esc(a.name)}</p><img src="${u}" style="max-width:100%;border-radius:10px;margin-bottom:14px">`}).join(''));
+ const bk=$('#aBk');if(bk)bk.onclick=()=>todoForm(tid)}
+function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;t.attachments=t.attachments||[];editTodoId=id;
  show('Edit task',`<div class="f"><div class="full"><label>Task</label><input id="tT" value="${esc(t.title)}"></div>
  <div><label>Due date</label><input type="date" id="tD" value="${t.due||''}"></div>
  <div><label>Priority</label><select id="tP"><option value="0">Normal</option><option value="1" ${t.pri?'selected':''}>High</option></select></div>
- <div class="full"><label>Linked invoice (optional)</label><select id="tI">${opts(S.invoices.slice().sort((a,b)=>b.no.localeCompare(a.no)).map(i=>[i.id,`${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due`]),t.invoiceId,'None')}</select></div></div>
- <div class="row" style="margin-top:14px"><button class="btn" id="tS">Save</button><button class="btn dng" id="tX">Delete</button></div>`);
+ <div class="full"><label>Linked invoice (optional)</label><select id="tI">${opts(S.invoices.slice().sort((a,b)=>b.no.localeCompare(a.no)).map(i=>[i.id,`${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due`]),t.invoiceId,'None')}</select></div>
+ <div class="full"><label>Attachments — screenshots or PDFs (you can also paste with Ctrl+V)</label><div id="tA"></div><input type="file" id="tF" accept="image/*,application/pdf" multiple></div></div>
+ <div class="row" style="margin-top:14px"><button class="btn" id="tS">Save</button><button class="btn dng" id="tX">Delete task</button></div>`);
+ editTodoId=id;
+ todoAtt=()=>{$('#tA').innerHTML=t.attachments.length?t.attachments.map(a=>`<div class="row" style="margin-bottom:6px"><a class="lnk" data-av="${a.id}">📎 ${esc(a.name)}</a><span class="sp"></span><button class="btn dng sm" data-ar="${a.id}" type="button">Remove</button></div>`).join(''):'<div class="hint" style="margin:0 0 6px">No attachments yet.</div>';
+  document.querySelectorAll('[data-av]').forEach(a=>a.onclick=()=>viewAtts(id,a.dataset.av));
+  document.querySelectorAll('[data-ar]').forEach(b=>b.onclick=()=>{const k=t.attachments.findIndex(x=>x.id===b.dataset.ar);removeProofs([t.attachments[k].path]);t.attachments.splice(k,1);save();todoAtt()})};
+ todoAtt();
+ $('#tF').onchange=e=>{attachFiles([...e.target.files],t.id,t.attachments,()=>{save();todoAtt&&todoAtt()});e.target.value=''};
  $('#tS').onclick=()=>{const v=$('#tT').value.trim();if(!v)return alert('Task cannot be empty');Object.assign(t,{title:v,due:$('#tD').value,pri:+$('#tP').value,invoiceId:$('#tI').value});save();dlg.close();render()};
- $('#tX').onclick=()=>{S.todos=S.todos.filter(x=>x.id!==id);save();dlg.close();render()}}
+ $('#tX').onclick=()=>{if(!confirm('Delete this task'+(t.attachments.length?' and its attachments':'')+'?'))return;removeProofs(t.attachments.map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==id);save();dlg.close();render()}}
 
 /* ---------- export / import / auth ---------- */
 $('#bExport').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download=`billing-export-${TODAY()}.json`;a.click()};
