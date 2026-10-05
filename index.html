@@ -137,6 +137,7 @@ code{background:var(--fill);padding:1px 6px;border-radius:6px}
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 <body>
 <header>
@@ -684,12 +685,19 @@ $('#bOut').onclick=()=>sb.auth.signOut();
 
 function tools(on){$('#tools').style.display=on?'flex':'none';$('#nav').style.display=on?'flex':'none';$('#tabbar').style.display=on?'':'none'}
 function showLogin(){signedIn=false;tools(false);
+ const key=cfg.turnstileSiteKey;let cap=null,wid=null;
  $('#main').innerHTML=`<div class="card" style="max-width:380px;margin:60px auto"><h2>Sign in</h2>
  <div class="f" style="grid-template-columns:1fr"><div><label>Email</label><input id="lE" type="email" autocomplete="username"></div>
  <div><label>Password</label><input id="lP" type="password" autocomplete="current-password"></div></div>
- <div class="row" style="margin-top:12px"><button class="btn" id="lB">Sign in</button><span id="lM" class="sm" style="color:var(--bad)"></span></div></div>`;
- const go=async()=>{$('#lM').textContent='';const{error}=await sb.auth.signInWithPassword({email:$('#lE').value.trim(),password:$('#lP').value});
-  if(error)$('#lM').textContent=error.message;else enter()};
+ ${key?'<div id="cf" style="margin-top:12px;min-height:65px"></div>':''}
+ <div class="row" style="margin-top:12px"><button class="btn" id="lB"${key?' disabled':''}>Sign in</button><span id="lM" class="sm" style="color:var(--bad)"></span></div></div>`;
+ if(key){let tries=0;const t=setInterval(()=>{
+   if(window.turnstile&&$('#cf')){clearInterval(t);wid=turnstile.render('#cf',{sitekey:key,theme:'auto',
+    callback:tok=>{cap=tok;$('#lB').disabled=false},'expired-callback':()=>{cap=null;$('#lB').disabled=true},'error-callback':()=>{cap=null;$('#lM').textContent='Security check failed to load. Reload the page.'}})}
+   else if(++tries>100){clearInterval(t);if($('#lM'))$('#lM').textContent='Security check could not load. Check your connection and reload.'}},100)}
+ const go=async()=>{if(key&&!cap)return;$('#lM').textContent='';$('#lB').disabled=true;
+  const{error}=await sb.auth.signInWithPassword({email:$('#lE').value.trim(),password:$('#lP').value,options:key?{captchaToken:cap}:undefined});
+  if(error){$('#lM').textContent=error.message;if(key&&window.turnstile){cap=null;turnstile.reset(wid)}else $('#lB').disabled=false}else enter()};
  $('#lB').onclick=go;$('#lP').onkeydown=e=>{if(e.key==='Enter')go()}}
 async function enter(){
  const{data}=await sb.auth.getSession();if(!data.session)return showLogin();
