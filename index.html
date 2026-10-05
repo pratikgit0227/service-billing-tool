@@ -91,6 +91,7 @@ code{background:var(--fill);padding:1px 6px;border-radius:6px}
 .chip.bad{background:var(--badBg);color:var(--bad)}.chip.today{background:var(--warnBg);color:var(--warn)}.chip.inv{background:var(--priBg);color:var(--pri);cursor:pointer}
 .x{flex:none;background:none;border:0;color:var(--mut);cursor:pointer;font-size:14px;padding:4px 8px;border-radius:8px;opacity:.5}
 .x:hover{opacity:1;background:var(--badBg);color:var(--bad)}
+.cal{flex:none;padding:4px 6px;border-radius:8px;text-decoration:none;opacity:.7;font-size:15px}.cal:hover{opacity:1;background:var(--priBg)}
 .add{display:flex;gap:8px}
 .add input{font-size:16px;padding:11px 14px}
 .sug{display:flex;gap:10px;align-items:center;padding:8px 2px;border-bottom:.5px solid var(--line)}
@@ -486,6 +487,18 @@ function suggestions(){
   .sort((a,b)=>overdueDays(b)-overdueDays(a)||remaining(b)-remaining(a))}
 const sugTodo=i=>newTodo({title:`Follow up: ${client(i.clientId).name} — ${i.no} (${inr(remaining(i))}${overdueDays(i)?`, ${overdueDays(i)}d overdue`:''})`,due:TODAY(),pri:overdueDays(i)>=30?1:0,invoiceId:i.id});
 
+/* ---------- Google Calendar / .ics ---------- */
+const calUrl=t=>{const d=t.due.replace(/-/g,''),n=addDays(t.due,1).replace(/-/g,'');const i=t.invoiceId&&S.invoices.find(x=>x.id===t.invoiceId);
+ const det=(i?`Invoice ${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due\n`:'')+'From Service Billing Tool';
+ return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent((t.pri?'! ':'')+t.title)+'&dates='+d+'/'+n+'&details='+encodeURIComponent(det)};
+const icsEsc=x=>String(x).replace(/\\/g,'\\\\').replace(/[,;]/g,m=>'\\'+m).replace(/\n/g,'\\n');
+function buildIcs(list){const stamp=new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
+ const ev=t=>['BEGIN:VEVENT',`UID:${t.id}@service-billing-tool`,`DTSTAMP:${stamp}`,`DTSTART;VALUE=DATE:${t.due.replace(/-/g,'')}`,`DTEND;VALUE=DATE:${addDays(t.due,1).replace(/-/g,'')}`,
+  `SUMMARY:${icsEsc((t.pri?'! ':'')+t.title)}`,'BEGIN:VALARM','ACTION:DISPLAY',`DESCRIPTION:${icsEsc(t.title)}`,'TRIGGER:PT9H','END:VALARM','END:VEVENT'].join('\r\n');
+ return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Service Billing Tool//EN','CALSCALE:GREGORIAN',...list.map(ev),'END:VCALENDAR'].join('\r\n')}
+function exportIcs(){const list=S.todos.filter(t=>!t.done&&t.due);if(!list.length)return alert('No open tasks with a due date to export.');
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buildIcs(list)],{type:'text/calendar'}));a.download='billing-todos.ics';a.click()}
+
 function vTodos(){
  const T=TODAY(),open=S.todos.filter(t=>!t.done),done=S.todos.filter(t=>t.done).sort((a,b)=>(b.doneAt||'').localeCompare(a.doneAt||''));
  const srt=(a,b)=>(+!!b.pri)-(+!!a.pri)||(a.due||'9').localeCompare(b.due||'9')||a.createdAt.localeCompare(b.createdAt);
@@ -495,12 +508,12 @@ function vTodos(){
   if(i)chips.push(`<span class="chip inv" data-iv="${i.id}">${esc(i.no)} · ${esc(client(i.clientId).name)}${remaining(i)>0?' · '+inr(remaining(i))+' due':' · paid ✓'}</span>`);
   if((t.attachments||[]).length)chips.push(`<span class="chip inv" data-at="${t.id}">📎 ${t.attachments.length}</span>`);
   if(t.auto)chips.push('<span class="chip">auto-completed: invoice paid</span>');
-  return `<div class="todo ${t.done?'done':''}" data-t="${t.id}"><button class="chk" data-c="${t.id}" aria-label="Toggle complete"></button><div class="tb" data-e="${t.id}"><div class="tt">${t.pri&&!t.done?'<span class="hi">!</span> ':''}${esc(t.title)}</div>${chips.length?`<div class="tm">${chips.join('')}</div>`:''}</div><button class="x" data-d="${t.id}" title="Delete">✕</button></div>`};
+  return `<div class="todo ${t.done?'done':''}" data-t="${t.id}"><button class="chk" data-c="${t.id}" aria-label="Toggle complete"></button><div class="tb" data-e="${t.id}"><div class="tt">${t.pri&&!t.done?'<span class="hi">!</span> ':''}${esc(t.title)}</div>${chips.length?`<div class="tm">${chips.join('')}</div>`:''}</div>${t.due&&!t.done?`<a class="cal" href="${calUrl(t)}" target="_blank" rel="noopener" title="Add to Google Calendar">📅</a>`:''}<button class="x" data-d="${t.id}" title="Delete">✕</button></div>`};
  const grp=(label,list,cls)=>list.length?`<div class="card"><h2 class="${cls||''}">${label} <span class="mut" style="font-weight:500">${list.length}</span></h2>${list.sort(srt).map(row).join('')}</div>`:'';
  const sug=suggestions(),shown=sug.slice(0,5);
  $('#main').innerHTML=`<div class="grid" style="max-width:760px;margin:0 auto">
  <div class="card"><div class="add"><input id="tIn" placeholder="Add a task…  e.g. “Call Ramesh tomorrow !”  or  “File GSTR-3B 20 oct”" autocomplete="off"><button class="btn sec" id="tClip" title="Attach screenshot / PDF (or paste with Ctrl+V)">📎</button><input type="file" id="tFile" accept="image/*,application/pdf" multiple hidden><button class="btn" id="tAdd">Add</button></div><div class="tm" id="tDA" style="margin-top:6px"></div>
-  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically. Paste a screenshot with Ctrl+V to attach it.</div></div>
+  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically. Paste a screenshot with Ctrl+V to attach it.</div><div style="margin-top:8px"><button class="btn sec sm" id="tIcs">📅 Export open tasks to calendar (.ics)</button></div></div>
  ${sug.length?`<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h2 style="margin:0">Suggested follow-ups <span class="mut" style="font-weight:500">${sug.length}</span></h2><button class="btn sec sm" id="sAll">Add all</button></div>
   <div class="hint" style="margin:0 0 6px">Unpaid invoices that are overdue or 30+ days old and have no open task.</div>
   ${shown.map(i=>`<div class="sug"><div class="tt">${esc(client(i.clientId).name)} <span class="mut">· ${esc(i.no)} · ${inr(remaining(i))}${overdueDays(i)?` · ${overdueDays(i)}d overdue`:''}</span></div><button class="btn sec sm" data-s="${i.id}">+ Task</button></div>`).join('')}
@@ -522,6 +535,7 @@ function vTodos(){
   setTimeout(()=>{t.done=!t.done;t.auto=false;t.doneAt=t.done?new Date().toISOString():'';save();render()},260)});
  document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.d);removeProofs((t.attachments||[]).map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==b.dataset.d);save();render()});
  document.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>todoForm(b.dataset.e));
+ $('#tIcs').onclick=exportIcs;
  document.querySelectorAll('[data-at]').forEach(b=>b.onclick=e=>{e.stopPropagation();viewAtts(b.dataset.at)});
  document.querySelectorAll('[data-iv]').forEach(b=>b.onclick=e=>{e.stopPropagation();openInvoice(b.dataset.iv)});
  document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{S.todos.push(sugTodo(S.invoices.find(i=>i.id===b.dataset.s)));save();render()});
@@ -555,13 +569,14 @@ function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;t.attachme
  <div><label>Priority</label><select id="tP"><option value="0">Normal</option><option value="1" ${t.pri?'selected':''}>High</option></select></div>
  <div class="full"><label>Linked invoice (optional)</label><select id="tI">${opts(S.invoices.slice().sort((a,b)=>b.no.localeCompare(a.no)).map(i=>[i.id,`${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due`]),t.invoiceId,'None')}</select></div>
  <div class="full"><label>Attachments — screenshots or PDFs (you can also paste with Ctrl+V)</label><div id="tA"></div><input type="file" id="tF" accept="image/*,application/pdf" multiple></div></div>
- <div class="row" style="margin-top:14px"><button class="btn" id="tS">Save</button><button class="btn dng" id="tX">Delete task</button></div>`);
+ <div class="row" style="margin-top:14px"><button class="btn" id="tS">Save</button><button class="btn sec" id="tCal" type="button">📅 Add to Google Calendar</button><button class="btn dng" id="tX">Delete task</button></div>`);
  editTodoId=id;
  todoAtt=()=>{$('#tA').innerHTML=t.attachments.length?t.attachments.map(a=>`<div class="row" style="margin-bottom:6px"><a class="lnk" data-av="${a.id}">📎 ${esc(a.name)}</a><span class="sp"></span><button class="btn dng sm" data-ar="${a.id}" type="button">Remove</button></div>`).join(''):'<div class="hint" style="margin:0 0 6px">No attachments yet.</div>';
   document.querySelectorAll('[data-av]').forEach(a=>a.onclick=()=>viewAtts(id,a.dataset.av));
   document.querySelectorAll('[data-ar]').forEach(b=>b.onclick=()=>{const k=t.attachments.findIndex(x=>x.id===b.dataset.ar);removeProofs([t.attachments[k].path]);t.attachments.splice(k,1);save();todoAtt()})};
  todoAtt();
  $('#tF').onchange=e=>{attachFiles([...e.target.files],t.id,t.attachments,()=>{save();todoAtt&&todoAtt()});e.target.value=''};
+ $('#tCal').onclick=()=>{const d=$('#tD').value;if(!d)return alert('Set a due date first, then add it to your calendar.');window.open(calUrl({...t,title:$('#tT').value.trim()||t.title,due:d,pri:+$('#tP').value}),'_blank','noopener')};
  $('#tS').onclick=()=>{const v=$('#tT').value.trim();if(!v)return alert('Task cannot be empty');Object.assign(t,{title:v,due:$('#tD').value,pri:+$('#tP').value,invoiceId:$('#tI').value});save();dlg.close();render()};
  $('#tX').onclick=()=>{if(!confirm('Delete this task'+(t.attachments.length?' and its attachments':'')+'?'))return;removeProofs(t.attachments.map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==id);save();dlg.close();render()}}
 
