@@ -1,6 +1,6 @@
-// Paste your Supabase values (Project Settings -> API). The anon/publishable key is safe to commit:
+// Supabase values (Project Settings -> API). The anon key is safe to commit:
 // all data is protected by login + row-level security (see supabase/schema.sql).
 window.BILLING_CONFIG = {
-  supabaseUrl: "YOUR_SUPABASE_URL",
-  supabaseAnonKey: "YOUR_SUPABASE_ANON_KEY"
+  supabaseUrl: "https://ympofqcmpsntrokpwrym.supabase.co",
+  supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InltcG9mcWNtcHNudHJva3B3cnltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTExODA2ODksImV4cCI6MjEwNjc1NjY4OX0.XBts2idtJJsV7Ewj1DP2b1lnVj7bkQFoLEV9plUSkSg"
 };
