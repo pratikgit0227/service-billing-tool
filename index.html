@@ -224,23 +224,17 @@ function detailText(t){const d=t.details,out=[];if(d.period)out.push(fmtM(d.peri
 const opts=(arr,sel,blank)=>(blank!==undefined?`<option value="">${esc(blank)}</option>`:'')+arr.map(o=>{const v=Array.isArray(o)?o[0]:o,l=Array.isArray(o)?o[1]:o;return `<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(l)}</option>`}).join('');
 
 /* ---------- filters ---------- */
-let F={client:'',service:'',fy:'',month:'',status:'',invFrom:'',invTo:'',dueFrom:'',dueTo:''};
+let F={client:'',service:'',fy:'',status:''};
 function filtered(){return S.invoices.filter(i=>{
  if(F.client&&i.clientId!==F.client)return false;if(F.service&&!i.items.some(t=>t.service===F.service))return false;
- if(F.fy&&!fyMatch(i,F.fy))return false;if(F.month&&!i.invoiceDate.startsWith(F.month))return false;
+ if(F.fy&&!fyMatch(i,F.fy))return false;
  if(F.status&&status(i)!==F.status)return false;
- if(F.invFrom&&i.invoiceDate<F.invFrom)return false;if(F.invTo&&i.invoiceDate>F.invTo)return false;
- if(F.dueFrom&&i.dueDate<F.dueFrom)return false;if(F.dueTo&&i.dueDate>F.dueTo)return false;return true})}
+ return true})}
 function filterBar(){return `<div class="card filters">
  <div><label>Client</label><select data-f="client">${opts(S.clients.map(c=>[c.id,c.name]),F.client,'All')}</select></div>
  <div><label>Service</label><select data-f="service">${opts(Object.keys(SERVICES),F.service,'All')}</select></div>
  <div><label>Financial Year</label><select data-f="fy">${opts(FYS,F.fy,'All')}</select></div>
- <div><label>Month (invoice)</label><input type="month" data-f="month" value="${F.month}"></div>
  <div><label>Payment Status</label><select data-f="status">${opts(STATUSES.map(s=>[s,STATUS_LABEL[s]]),F.status,'All')}</select></div>
- <div><label>Invoice date from</label><input type="date" data-f="invFrom" value="${F.invFrom}"></div>
- <div><label>Invoice date to</label><input type="date" data-f="invTo" value="${F.invTo}"></div>
- <div><label>Due date from</label><input type="date" data-f="dueFrom" value="${F.dueFrom}"></div>
- <div><label>Due date to</label><input type="date" data-f="dueTo" value="${F.dueTo}"></div>
  <div><button class="btn sec" id="fClear">Clear filters</button></div></div>`}
 function bindFilters(){document.querySelectorAll('[data-f]').forEach(e=>e.onchange=()=>{F[e.dataset.f]=e.value;render()});
  const c=$('#fClear');if(c)c.onclick=()=>{Object.keys(F).forEach(k=>F[k]='');render()}}
