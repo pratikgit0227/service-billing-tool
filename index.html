@@ -487,10 +487,11 @@ const mkDate=(d,m,y)=>{d=+d;m=+m;if(m<1||m>12||d<1||d>31)return '';const T=TODAY
  const f=yy=>`${yy}-${pad(m)}-${pad(d)}`;let r=f(yy);if(!y&&r<T)r=f(++yy);return new Date(Date.UTC(yy,m-1,d)).getUTCMonth()===m-1?r:''};
 /* "Call Ramesh tomorrow !" / "File GSTR-3B 20 oct" / "Follow up fri" -> {title,due,pri} */
 function parseTask(raw){
- let t=' '+raw+' ',due='',pri=0,time='';const T=TODAY();
+ let t=' '+raw+' ',due='',pri=0,time='',invite='';const T=TODAY();
  const take=(re,fn)=>{const m=t.match(re);if(!m)return false;const v=fn(m);if(!v)return false;t=t.replace(m[0],' ');return true};
  const D=v=>{if(v)due=v;return v};
  take(/\s(!+|urgent|asap)(?=\s)/i,()=>{pri=1;return 1});
+ take(/\s(?:(?:invite|add to|cc|share with|with)\s+)?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)(?=\s)/i,m=>{invite=m[1].toLowerCase();return 1});
  take(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s?(am|pm)(?=\s)/i,m=>{let h=+m[1];if(h<1||h>12)return false;const pm=m[3].toLowerCase()==='pm';if(pm&&h<12)h+=12;if(!pm&&h===12)h=0;time=pad(h)+':'+(m[2]||'00');return 1})||
  take(/\s(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)(?=\s)/,m=>{time=pad(+m[1])+':'+m[2];return 1});
  take(/\s(today|tonight)(?=\s)/i,()=>D(T))||
@@ -503,11 +504,11 @@ function parseTask(raw){
  take(new RegExp('\\s(?:on |this |next )?('+WDRE+')(?=\\s)','i'),m=>{const w=['sun','mon','tue','wed','thu','fri','sat'].indexOf(m[1].slice(0,3).toLowerCase());
   const cur=new Date(dnum(T)*864e5).getUTCDay();return D(addDays(T,((w-cur+7)%7)||7))});
  let title=t.replace(/\s+(by|on|due on|due|before|at)\s*$/i,' ').replace(/\s+/g,' ').trim();
- if(time&&!due)due=T;return {title:title||raw.trim(),due,time,pri};
+ if(time&&!due)due=T;return {title:title||raw.trim(),due,time,invite,pri};
 }
 const dueLabel=d=>d===TODAY()?'Today':d===addDays(TODAY(),1)?'Tomorrow':d===addDays(TODAY(),-1)?'Yesterday':fmtD(d);
 const fmtTime=h=>{const[a,b]=h.split(':').map(Number);return `${a%12||12}:${pad(b)} ${a<12?'AM':'PM'}`};
-const newTodo=(o)=>({id:uid(),title:'',due:'',time:'',gcalId:'',pri:0,invoiceId:'',done:false,createdAt:new Date().toISOString(),...o});
+const newTodo=(o)=>({id:uid(),title:'',due:'',time:'',invite:'',gcalId:'',pri:0,invoiceId:'',done:false,createdAt:new Date().toISOString(),...o});
 /* tasks linked to an invoice complete themselves once that invoice is fully paid */
 function syncTodos(){let ch=false;S.todos.forEach(t=>{if(!t.done&&t.invoiceId){const i=S.invoices.find(x=>x.id===t.invoiceId);if(i&&remaining(i)<=0){t.done=true;t.auto=true;t.doneAt=new Date().toISOString();ch=true}}});if(ch&&signedIn)save()}
 function suggestions(){
@@ -518,8 +519,8 @@ const sugTodo=i=>newTodo({title:`Follow up: ${client(i.clientId).name} — ${i.n
 
 /* ---------- Google Calendar / .ics ---------- */
 const calUrl=t=>{const d=t.due.replace(/-/g,''),n=addDays(t.due,1).replace(/-/g,'');const i=t.invoiceId&&S.invoices.find(x=>x.id===t.invoiceId);
- const det=(i?`Invoice ${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due\n`:'')+'From Service Billing Tool';
- return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent((t.pri?'! ':'')+t.title)+'&dates='+d+'/'+n+'&details='+encodeURIComponent(det)};
+ const det=(i&&!t.invite?`Invoice ${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due\n`:'')+'From Service Billing Tool';
+ return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent((t.pri?'! ':'')+t.title)+'&dates='+d+'/'+n+'&details='+encodeURIComponent(det)+(t.invite?'&add='+encodeURIComponent(t.invite):'')};
 const icsEsc=x=>String(x).replace(/\\/g,'\\\\').replace(/[,;]/g,m=>'\\'+m).replace(/\n/g,'\\n');
 function buildIcs(list){const stamp=new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
  const ev=t=>['BEGIN:VEVENT',`UID:${t.id}@service-billing-tool`,`DTSTAMP:${stamp}`,`DTSTART;VALUE=DATE:${t.due.replace(/-/g,'')}`,`DTEND;VALUE=DATE:${addDays(t.due,1).replace(/-/g,'')}`,
@@ -532,7 +533,8 @@ function exportIcs(){const list=S.todos.filter(t=>!t.done&&t.due);if(!list.lengt
 const G={tok:null,exp:0,msg:'',busy:false};
 const gReady=()=>!!G.tok&&Date.now()<G.exp-60000;
 const gForget=t=>{if(t&&t.gcalId)S.gdel.push(t.gcalId)};
-const gSig=t=>[t.title,t.due,t.time||'',t.pri?1:0,t.done?1:0,t.invoiceId||''].join('|');
+const gSig=t=>[t.title,t.due,t.time||'',t.pri?1:0,t.done?1:0,t.invoiceId||''].join('|')+(t.invite?'|'+t.invite:'');
+const okEmail=e=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 function updG(){const b=$('#tG');if(!b)return;
  b.textContent=!cfg.googleClientId?'📅 Auto-sync to Google Calendar':gReady()?'✓ Google Calendar connected':'📅 Connect Google Calendar';
  b.title=G.msg||''}
@@ -543,7 +545,8 @@ async function gapi(method,path,body){
  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error((j.error&&j.error.message)||('Google error '+r.status));return j}
 function gEvent(t){
  const i=t.invoiceId&&S.invoices.find(x=>x.id===t.invoiceId);
- const ev={summary:(t.pri?'! ':'')+t.title,description:(i?`Invoice ${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due\n`:'')+'From Service Billing Tool'};
+ /* when a guest is invited, invoice/client details are NOT put in the event text */
+ const ev={summary:(t.pri?'! ':'')+t.title,description:(i&&!t.invite?`Invoice ${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due\n`:'')+'From Service Billing Tool',attendees:t.invite?[{email:t.invite}]:[]};
  if(t.time){const tz=Intl.DateTimeFormat().resolvedOptions().timeZone,e=new Date(`${t.due}T${t.time}:00`);e.setMinutes(e.getMinutes()+30);
   ev.start={dateTime:`${t.due}T${t.time}:00`,timeZone:tz};ev.end={dateTime:`${iso(e)}T${pad(e.getHours())}:${pad(e.getMinutes())}:00`,timeZone:tz};
   ev.reminders={useDefault:false,overrides:[{method:'popup',minutes:10}]}}
@@ -552,12 +555,12 @@ function gEvent(t){
 async function gSyncAll(){
  if(!gReady()||G.busy)return;G.busy=true;let ch=false;
  try{
-  for(const id of S.gdel.slice()){await gapi('DELETE','/calendars/primary/events/'+id);S.gdel=S.gdel.filter(x=>x!==id);ch=true}
+  for(const id of S.gdel.slice()){await gapi('DELETE','/calendars/primary/events/'+encodeURIComponent(id)+'?sendUpdates=all');S.gdel=S.gdel.filter(x=>x!==id);ch=true}
   for(const t of S.todos){const sig=gSig(t);if(t.gSig===sig)continue;
    if(!t.done&&t.due){
-    if(t.gcalId){const r=await gapi('PATCH','/calendars/primary/events/'+t.gcalId,gEvent(t));if(r.gone)t.gcalId=''}
-    if(!t.gcalId){const r=await gapi('POST','/calendars/primary/events',gEvent(t));t.gcalId=r.id}
-   }else if(t.gcalId){await gapi('DELETE','/calendars/primary/events/'+t.gcalId);t.gcalId=''}
+    if(t.gcalId){const r=await gapi('PATCH','/calendars/primary/events/'+encodeURIComponent(t.gcalId)+'?sendUpdates=all',gEvent(t));if(r.gone)t.gcalId=''}
+    if(!t.gcalId){const r=await gapi('POST','/calendars/primary/events?sendUpdates=all',gEvent(t));t.gcalId=r.id}
+   }else if(t.gcalId){await gapi('DELETE','/calendars/primary/events/'+encodeURIComponent(t.gcalId)+'?sendUpdates=all');t.gcalId=''}
    t.gSig=sig;ch=true}
   G.msg='Synced '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});setStat('Google Calendar synced')
  }catch(e){G.msg=e.message;setStat('Calendar: '+e.message,1)}
@@ -592,6 +595,7 @@ function vTodos(){
  const row=t=>{const i=inv(t),chips=[];
   if(t.due&&!t.done)chips.push(`<span class="chip ${t.due<T?'bad':t.due===T?'today':''}">${esc(dueLabel(t.due))}${t.time?' · '+fmtTime(t.time):''}</span>`);
   if(i)chips.push(`<span class="chip inv" data-iv="${i.id}">${esc(i.no)} · ${esc(client(i.clientId).name)}${remaining(i)>0?' · '+inr(remaining(i))+' due':' · paid ✓'}</span>`);
+  if(t.invite)chips.push(`<span class="chip" title="Invited to this calendar event">✉ ${esc(t.invite)}</span>`);
   if((t.attachments||[]).length)chips.push(`<span class="chip inv" data-at="${t.id}">📎 ${t.attachments.length}</span>`);
   if(t.auto)chips.push('<span class="chip">auto-completed: invoice paid</span>');
   return `<div class="todo ${t.done?'done':''}" data-t="${t.id}"><button class="chk" data-c="${t.id}" aria-label="Toggle complete"></button><div class="tb" data-e="${t.id}"><div class="tt">${t.pri&&!t.done?'<span class="hi">!</span> ':''}${esc(t.title)}</div>${chips.length?`<div class="tm">${chips.join('')}</div>`:''}</div>${t.due&&!t.done?`<a class="cal" href="${calUrl(t)}" target="_blank" rel="noopener" title="Add to Google Calendar">📅</a>`:''}<button class="x" data-d="${t.id}" title="Delete">✕</button></div>`};
@@ -611,7 +615,7 @@ function vTodos(){
  const inp=$('#tIn'),hint=$('#tHint');
  const add=()=>{const r=inp.value.trim();if(!r)return;const p=parseTask(r);S.todos.push(newTodo({...p,id:tdraft.id,attachments:tdraft.atts}));tdraft={id:uid(),atts:[]};save();render();$('#tIn').focus()};
  inp.oninput=()=>{const r=inp.value.trim();if(!r){hint.textContent='Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it\'s picked up automatically.';return}
-  const p=parseTask(r);hint.textContent=`→ “${p.title}”${p.due?' · due '+dueLabel(p.due)+(p.time?' '+fmtTime(p.time):''):' · no date'}${p.pri?' · high priority':''}`};
+  const p=parseTask(r);hint.textContent=`→ “${p.title}”${p.due?' · due '+dueLabel(p.due)+(p.time?' '+fmtTime(p.time):''):' · no date'}${p.pri?' · high priority':''}${p.invite?' · invite '+p.invite:''}`};
  inp.onkeydown=e=>{if(e.key==='Enter')add()};$('#tAdd').onclick=add;
  const drawDraft=()=>{$('#tDA').innerHTML=tdraft.atts.map(a=>`<span class="chip inv">📎 ${esc(a.name)} <span data-xd="${a.id}" style="cursor:pointer;margin-left:4px">✕</span></span>`).join('');
   document.querySelectorAll('[data-xd]').forEach(x=>x.onclick=()=>{const k=tdraft.atts.findIndex(a=>a.id===x.dataset.xd);removeProofs([tdraft.atts[k].path]);tdraft.atts.splice(k,1);drawDraft()})};
@@ -655,6 +659,8 @@ function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;t.attachme
  <div><label>Time (optional)</label><input type="time" id="tM" value="${t.time||''}"></div>
  <div><label>Priority</label><select id="tP"><option value="0">Normal</option><option value="1" ${t.pri?'selected':''}>High</option></select></div>
  <div class="full"><label>Linked invoice (optional)</label><select id="tI">${opts(S.invoices.slice().sort((a,b)=>b.no.localeCompare(a.no)).map(i=>[i.id,`${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due`]),t.invoiceId,'None')}</select></div>
+ <div class="full"><label>Also add to another Google Calendar (email)</label><input type="email" id="tInv" list="invList" placeholder="name@gmail.com" value="${esc(t.invite||'')}"><datalist id="invList">${[...new Set(S.todos.map(x=>x.invite).filter(Boolean))].map(e=>`<option value="${esc(e)}">`).join('')}</datalist>
+  <div class="hint">That address receives a calendar invitation by email and the event appears in their calendar. Needs Google Calendar connected. Invoice and client details are not included.</div></div>
  <div class="full"><label>Attachments — screenshots or PDFs (you can also paste with Ctrl+V)</label><div id="tA"></div><input type="file" id="tF" accept="image/*,application/pdf" multiple></div></div>
  <div class="row" style="margin-top:14px"><button class="btn" id="tS">Save</button><button class="btn sec" id="tCal" type="button">📅 Add to Google Calendar</button><button class="btn dng" id="tX">Delete task</button></div>`);
  editTodoId=id;
@@ -663,8 +669,8 @@ function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;t.attachme
   document.querySelectorAll('[data-ar]').forEach(b=>b.onclick=()=>{const k=t.attachments.findIndex(x=>x.id===b.dataset.ar);removeProofs([t.attachments[k].path]);t.attachments.splice(k,1);save();todoAtt()})};
  todoAtt();
  $('#tF').onchange=e=>{attachFiles([...e.target.files],t.id,t.attachments,()=>{save();todoAtt&&todoAtt()});e.target.value=''};
- $('#tCal').onclick=()=>{const d=$('#tD').value;if(!d)return alert('Set a due date first, then add it to your calendar.');window.open(calUrl({...t,title:$('#tT').value.trim()||t.title,due:d,pri:+$('#tP').value}),'_blank','noopener')};
- $('#tS').onclick=()=>{const v=$('#tT').value.trim();if(!v)return alert('Task cannot be empty');Object.assign(t,{title:v,due:$('#tD').value,time:$('#tM').value,pri:+$('#tP').value,invoiceId:$('#tI').value});save();dlg.close();render()};
+ $('#tCal').onclick=()=>{const d=$('#tD').value;if(!d)return alert('Set a due date first, then add it to your calendar.');window.open(calUrl({...t,title:$('#tT').value.trim()||t.title,due:d,pri:+$('#tP').value,invite:$('#tInv').value.trim()}),'_blank','noopener')};
+ $('#tS').onclick=()=>{const v=$('#tT').value.trim();if(!v)return alert('Task cannot be empty');const inv=$('#tInv').value.trim().toLowerCase();if(inv&&!okEmail(inv))return alert('Enter a valid email for the invitation, or leave it empty.');Object.assign(t,{invite:inv,title:v,due:$('#tD').value,time:$('#tM').value,pri:+$('#tP').value,invoiceId:$('#tI').value});save();dlg.close();render()};
  $('#tX').onclick=()=>{if(!confirm('Delete this task'+(t.attachments.length?' and its attachments':'')+'?'))return;gForget(t);removeProofs(t.attachments.map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==id);save();dlg.close();render()}}
 
 /* ---------- export / import / auth ---------- */
