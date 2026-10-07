@@ -1,0 +1,15 @@
+# never commit client data, exports or secrets
+*.xlsx
+*.xls
+*.csv
+*import*.json
+billing-export-*.json
+.env
+.env.*
+*.pem
+*.key
+service-account*.json
+client_secret*.json
+node_modules/
+_t/
+_test*/

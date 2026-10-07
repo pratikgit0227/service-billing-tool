@@ -1,0 +1,735 @@
+/* ---------- config ---------- */
+const FYS=['2022-23','2023-24','2024-25','2025-26','2026-27','2027-28','2028-29'];
+const MODES=['UPI','Bank Transfer (NEFT/IMPS/RTGS)','Cash','Cheque','Card','Other'];
+const STATUSES=['Paid','Partial','Pending','Overdue'];
+const STATUS_LABEL={Paid:'Paid',Partial:'Partially Paid',Pending:'Pending',Overdue:'Overdue'};
+/* typeLabel: label of the sub-service field (priced via Pricing Master). extra: service-specific fields */
+const SERVICES={
+ 'ITR Filing':{typeLabel:'ITR Type',extra:[{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'GST Filing':{typeLabel:'Return Type',extra:[{k:'period',l:'Month / Return Period',kind:'month'},{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'GST Audit':{typeLabel:'Return Type',extra:[{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'Tax Planning':{typeLabel:'Service Type',extra:[{k:'fy',l:'Financial Year (if applicable)',kind:'fy'}]},
+ 'Tax Audit':{typeLabel:'Service Type',extra:[{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'Sale of Property':{typeLabel:'Service Type',extra:[{k:'property',l:'Property / Transaction Details',kind:'textarea',req:1},{k:'txnDate',l:'Transaction Date',kind:'date'}]},
+ 'Accounting':{typeLabel:'Accounting Service Type',extra:[{k:'period',l:'Month / Period',kind:'month'},{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
+ 'FSSAI':{typeLabel:'Service Type',extra:[{k:'licenseType',l:'License Type',kind:'select',opts:['','Basic Registration','State License','Central License']}]},
+ 'Udyam Registration':{typeLabel:'Service Type',extra:[]}
+};
+const SEED_PRICES=[['ITR Filing','ITR-1'],['ITR Filing','ITR-2'],['ITR Filing','ITR-3'],['ITR Filing','ITR-4'],['ITR Filing','ITR-5'],
+ ['GST Filing','GSTR-1'],['GST Filing','GSTR-3B'],['GST Filing','GSTR-9'],['GST Audit','GSTR-9C'],
+ ['Tax Planning','Tax Planning'],['Tax Audit','Tax Audit'],['Sale of Property','Property Sale Advisory'],
+ ['Accounting','Monthly Bookkeeping'],['Accounting','Annual Accounts Finalisation'],['FSSAI','Food License'],['Udyam Registration','Udyam Registration']];
+
+/* ---------- cloud storage (Supabase: Postgres + Auth + private Storage bucket) ---------- */
+const cfg=window.BILLING_CONFIG||{};
+const sb=(cfg.supabaseUrl&&!/YOUR_/.test(cfg.supabaseUrl)&&window.supabase)?supabase.createClient(cfg.supabaseUrl,cfg.supabaseAnonKey):null;
+let S={clients:[],pricing:[],invoices:[],todos:[],gdel:[],seq:1};
+const TABLES=['clients','pricing','invoices'];
+let snap={clients:{},pricing:{},invoices:{},seq:null},chain=Promise.resolve(),pending=0,signedIn=false;
+const setStat=(t,bad)=>{const e=document.getElementById('stat');if(e){e.textContent=t;e.style.color=bad?'var(--bad)':''}};
+/* ---- input validation: everything read from the cloud (or an import) is rebuilt from a whitelist ---- */
+const ID_RE=/^[A-Za-z0-9_-]{1,80}$/,DATE_RE=/^\d{4}-\d{2}-\d{2}$/,TIME_RE=/^\d{2}:\d{2}$/,GID_RE=/^[a-v0-9]{5,1024}$/,
+ PATH_RE=/^[A-Za-z0-9_-]{1,100}\/[A-Za-z0-9_-]{1,100}\.(jpg|pdf)$/,EMAIL_RE=/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/;
+const num=x=>{const n=Number(x);return Number.isFinite(n)?n:0};
+const sstr=(x,max=500)=>typeof x==='string'?x.slice(0,max):'';
+const okId=x=>typeof x==='string'&&ID_RE.test(x);
+const cleanProof=p=>p&&typeof p==='object'&&PATH_RE.test(p.path)?{name:sstr(p.name,200),path:p.path}:null;
+function cleanDetails(svc,d){const o={};if(!d||typeof d!=='object')return o;
+ SERVICES[svc].extra.forEach(f=>{const v=d[f.k];if(typeof v!=='string')return;
+  if((f.k==='fy'||f.k==='period')&&!/^\d{4}-\d{2}$/.test(v))return;if(f.k==='txnDate'&&!DATE_RE.test(v))return;o[f.k]=v.slice(0,f.k==='property'?1000:60)});return o}
+function sanitizeState(r){
+ const dropped=[],arr=x=>Array.isArray(x)?x:[],clients=[],pricing=[],invoices=[],todos=[];
+ arr(r.clients).forEach(c=>{if(!c||typeof c!=='object'||!okId(c.id)){dropped.push('client');return}
+  clients.push({id:c.id,name:sstr(c.name,200),phone:sstr(c.phone,40),email:sstr(c.email,254),notes:sstr(c.notes,500)})});
+ arr(r.pricing).forEach(p=>{if(!p||typeof p!=='object'||!okId(p.id)||!SERVICES[p.service]){dropped.push('price');return}
+  pricing.push({id:p.id,service:p.service,type:sstr(p.type,120),price:Math.max(0,num(p.price))})});
+ arr(r.invoices).forEach(i=>{
+  if(!i||typeof i!=='object'||!okId(i.id)||!/^INV-\d{1,9}$/.test(i.no||'')){dropped.push('invoice');return}
+  const items=arr(i.items).filter(t=>t&&typeof t==='object'&&SERVICES[t.service]).map(t=>({id:okId(t.id)?t.id:uid(),service:t.service,type:sstr(t.type,120),details:cleanDetails(t.service,t.details),amount:Math.max(0,num(t.amount))}));
+  const invDate=DATE_RE.test(i.invoiceDate)?i.invoiceDate:TODAY();
+  const inv={id:i.id,no:i.no,clientId:okId(i.clientId)?i.clientId:'',items,invoiceDate:invDate,dueDate:DATE_RE.test(i.dueDate)?i.dueDate:invDate,
+   amount:items.reduce((a,t)=>a+t.amount,0),notes:sstr(i.notes,2000),
+   payments:arr(i.payments).filter(p=>p&&typeof p==='object'&&num(p.amount)>0).map(p=>({id:okId(p.id)?p.id:uid(),amount:num(p.amount),date:DATE_RE.test(p.date)?p.date:TODAY(),mode:sstr(p.mode,60),note:sstr(p.note,500),proof:cleanProof(p.proof)}))};
+  if(DATE_RE.test(i.createdAt))inv.createdAt=i.createdAt;
+  invoices.push(inv)});
+ arr(r.todos).forEach(t=>{if(!t||typeof t!=='object'||!okId(t.id)||!sstr(t.title,500).trim()){dropped.push('task');return}
+  const o={id:t.id,title:sstr(t.title,500),due:DATE_RE.test(t.due)?t.due:'',time:TIME_RE.test(t.time)?t.time:'',invite:EMAIL_RE.test(t.invite||'')?String(t.invite).toLowerCase():'',
+   gcalId:GID_RE.test(t.gcalId||'')?t.gcalId:'',pri:t.pri?1:0,invoiceId:okId(t.invoiceId)?t.invoiceId:'',done:!!t.done,createdAt:sstr(t.createdAt,40)||new Date().toISOString()};
+  if(t.auto)o.auto=true;if(t.doneAt)o.doneAt=sstr(t.doneAt,40);if(t.gSig)o.gSig=sstr(t.gSig,1000);
+  const at=arr(t.attachments).filter(a=>a&&typeof a==='object'&&PATH_RE.test(a.path)).map(a=>({id:okId(a.id)?a.id:uid(),name:sstr(a.name,200),path:a.path}));if(at.length)o.attachments=at;
+  todos.push(o)});
+ return{state:{clients,pricing,invoices,todos,gdel:arr(r.gdel).filter(g=>typeof g==='string'&&GID_RE.test(g))},dropped}}
+
+/* ---- cloud sync with version checks: a save that would overwrite someone else's newer change is refused, never silent ---- */
+class Conflict extends Error{}
+let V={clients:{},pricing:{},invoices:{},todos:undefined,seq:undefined},E={todos:false,seq:false},warnedDrop=false;
+const verCond=(q,v)=>v===undefined?q.is('data->>_v',null):q.eq('data->>_v',String(v));
+const stripV=d=>{const{_v,...rest}=(d&&typeof d==='object')?d:{};return[rest,_v]};
+async function load(){
+ const res=await Promise.all([...TABLES.map(t=>sb.from(t).select('id,data')),sb.from('meta').select('data').eq('id','seq'),sb.from('meta').select('data').eq('id','todos')]);
+ res.forEach(r=>{if(r.error)throw r.error});
+ const raw={clients:[],pricing:[],invoices:[]};V={clients:{},pricing:{},invoices:{}};
+ TABLES.forEach((t,k)=>res[k].data.forEach(r=>{const[d,v]=stripV(r.data);d.id=r.id;raw[t].push(d);V[t][r.id]=v}));
+ raw.invoices.forEach(normInv);
+ const m=res[3].data[0],td=res[4].data[0];
+ const[mv,sv]=m?stripV(m.data):[{n:1},undefined];V.seq=sv;E.seq=!!m;
+ const[tv,tver]=td?stripV(td.data):[{items:[],gdel:[]},undefined];V.todos=tver;E.todos=!!td;
+ const clean=sanitizeState({clients:raw.clients,pricing:raw.pricing,invoices:raw.invoices,todos:tv.items,gdel:tv.gdel});
+ S={...clean.state,seq:Math.max(1,Math.floor(num(mv.n))||1)};
+ snap={clients:{},pricing:{},invoices:{},seq:S.seq,todos:JSON.stringify([S.todos,S.gdel])};
+ TABLES.forEach(t=>S[t].forEach(x=>snap[t][x.id]=JSON.stringify(x)));
+ if(clean.dropped.length&&!warnedDrop){warnedDrop=true;alert(clean.dropped.length+' stored record(s) had invalid data and are hidden. They have NOT been deleted.')}
+ if(!S.pricing.length){S.pricing=SEED_PRICES.map(([service,type])=>({id:uid(),service,type,price:0}));await flush()}
+ setStat('Synced');
+}
+function save(){pending++;chain=chain.then(flush).catch(async e=>{
+  if(e instanceof Conflict){setStat('Out of date — reloaded',1);alert('This data was changed on another device or tab, so your last change was NOT saved. The latest version has been loaded — please repeat your change.');try{await load();render()}catch(_){}}
+  else{setStat('Save failed',1);alert('Could not save to the cloud: '+(e.message||e)+'\nReload the page to resync.')}}).finally(()=>pending--);return chain}
+async function writeRow(t,x){
+ const id=x.id,exists=id in snap[t],ts=new Date().toISOString(),nv=(V[t][id]??0)+1,payload={...x,_v:nv};
+ if(exists){const{data,error}=await verCond(sb.from(t).update({data:payload,updated_at:ts}).eq('id',id),V[t][id]).select('id');if(error)throw error;if(!data.length)throw new Conflict()}
+ else{const{error}=await sb.from(t).insert({id,data:payload,updated_at:ts});if(error){if(error.code==='23505')throw new Conflict();throw error}}
+ V[t][id]=nv;snap[t][id]=JSON.stringify(x)}
+async function dropRow(t,id){
+ const{data,error}=await verCond(sb.from(t).delete().eq('id',id),V[t][id]).select('id');if(error)throw error;if(!data.length)throw new Conflict();
+ delete snap[t][id];delete V[t][id]}
+async function writeMeta(id,obj,key){
+ const nv=(V[key]??0)+1,payload={...obj,_v:nv};
+ if(E[key]){const{data,error}=await verCond(sb.from('meta').update({data:payload}).eq('id',id),V[key]).select('id');if(error)throw error;if(!data.length)throw new Conflict()}
+ else{const{error}=await sb.from('meta').insert({id,data:payload});if(error){if(error.code==='23505')throw new Conflict();throw error}E[key]=true}
+ V[key]=nv}
+async function flush(){
+ setStat('Saving…');
+ for(const t of TABLES){
+  const cur=new Map(S[t].map(x=>[x.id,x]));
+  for(const[id,x]of cur){if(snap[t][id]!==JSON.stringify(x))await writeRow(t,x)}
+  for(const id of Object.keys(snap[t]))if(!cur.has(id))await dropRow(t,id);
+ }
+ const j=JSON.stringify([S.todos,S.gdel]);
+ if(snap.todos!==j){await writeMeta('todos',{items:S.todos,gdel:S.gdel},'todos');snap.todos=j}
+ if(snap.seq!==S.seq){
+  try{await writeMeta('seq',{n:S.seq},'seq')}
+  catch(e){if(!(e instanceof Conflict))throw e;
+   const g=await sb.from('meta').select('data').eq('id','seq').maybeSingle();const[rv,vv]=stripV(g.data&&g.data.data);
+   S.seq=Math.max(S.seq,Math.floor(num(rv.n)));V.seq=vv;E.seq=!!g.data;await writeMeta('seq',{n:S.seq},'seq')}
+  snap.seq=S.seq}
+ setStat('Saved to cloud');
+}
+async function refresh(){if(signedIn&&Date.now()-lastActive>IDLE_MS){sb.auth.signOut();return}if(!signedIn||pending||dlg.open)return;try{await load();render();showReminders()}catch(e){setStat('Sync failed',1)}}
+const BUCKET='proofs',IDLE_MS=30*60*1000;let lastActive=Date.now();
+async function uploadBlob(blob,type,name,invId,pid){
+ const ext=type==='application/pdf'?'pdf':'jpg',path=`${invId}/${pid}.${ext}`;
+ const{error}=await sb.storage.from(BUCKET).upload(path,blob,{contentType:type,upsert:true});if(error)throw error;return{name,path}}
+async function uploadProof(f,invId,pid){
+ if(f.type==='application/pdf'){if(f.size>10e6)throw new Error('PDF is over 10 MB');return uploadBlob(f,'application/pdf',f.name,invId,pid)}
+ return uploadBlob(await compressImage(f),'image/jpeg',f.name,invId,pid)}
+const removeProofs=paths=>{paths=paths.filter(Boolean);try{if(sb&&paths.length)sb.storage.from(BUCKET).remove(paths).catch(()=>{})}catch{}};
+
+/* ---------- helpers ---------- */
+const $=s=>document.querySelector(s), dlg=$('#dlg');
+$('#dClose').onclick=()=>dlg.close();
+const uid=()=>Math.random().toString(36).slice(2,10);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const inr=n=>'₹'+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
+const pad=n=>String(n).padStart(2,'0');
+const iso=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const TODAY=()=>iso(new Date());
+const dnum=s=>{const[y,m,d]=s.split('-').map(Number);return Date.UTC(y,m-1,d)/864e5};
+const addDays=(s,n)=>{const d=new Date(dnum(s)*864e5+n*864e5);return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`};
+const fmtD=s=>{if(!s)return'—';const[y,m,d]=s.split('-');return `${d} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]} ${y}`};
+const fmtM=s=>{if(!s)return'';const[y,m]=s.split('-');return `${['January','February','March','April','May','June','July','August','September','October','November','December'][m-1]} ${y}`};
+const fyOf=s=>{const[y,m]=s.split('-').map(Number);const a=m>=4?y:y-1;return `${a}-${String(a+1).slice(2)}`};
+const fyFromMonth=s=>s?fyOf(s+'-01'):'';
+
+const received=i=>i.payments.reduce((a,p)=>a+Number(p.amount),0);
+const remaining=i=>Math.max(0,Number(i.amount)-received(i));
+const overdueDays=i=>remaining(i)>0&&i.dueDate&&i.dueDate<TODAY()?dnum(TODAY())-dnum(i.dueDate):0;
+function status(i){if(remaining(i)<=0)return'Paid';if(overdueDays(i)>0)return'Overdue';return received(i)>0?'Partial':'Pending'}
+const svcLabel=i=>i.items.map(t=>t.type).join(" + ");
+const fyMatch=(i,fy)=>i.items.some(t=>(t.details.fy||fyOf(i.invoiceDate))===fy);
+/* legacy single-service invoices -> one line item */
+function normInv(i){if(!i.items){i.items=[{id:i.id+'-1',service:i.service,type:i.type,details:i.details||{},amount:i.amount}];delete i.service;delete i.type;delete i.details}return i}
+const client=id=>S.clients.find(c=>c.id===id)||{name:'(deleted)'};
+const typesFor=svc=>S.pricing.filter(p=>p.service===svc).map(p=>p.type);
+const priceFor=(svc,type)=>(S.pricing.find(p=>p.service===svc&&p.type===type)||{}).price;
+function detailText(t){const d=t.details,out=[];if(d.period)out.push(fmtM(d.period));if(d.fy)out.push('FY '+d.fy);if(d.licenseType)out.push(d.licenseType);if(d.property)out.push(d.property);if(d.txnDate)out.push('Txn '+fmtD(d.txnDate));return out.join(' · ')}
+const opts=(arr,sel,blank)=>(blank!==undefined?`<option value="">${esc(blank)}</option>`:'')+arr.map(o=>{const v=Array.isArray(o)?o[0]:o,l=Array.isArray(o)?o[1]:o;return `<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(l)}</option>`}).join('');
+
+/* ---------- filters ---------- */
+let F={client:'',service:'',fy:'',status:''};
+function filtered(){return S.invoices.filter(i=>{
+ if(F.client&&i.clientId!==F.client)return false;if(F.service&&!i.items.some(t=>t.service===F.service))return false;
+ if(F.fy&&!fyMatch(i,F.fy))return false;
+ if(F.status&&status(i)!==F.status)return false;
+ return true})}
+function filterBar(){return `<div class="card filters">
+ <div><label>Client</label><select data-f="client">${opts(S.clients.map(c=>[c.id,c.name]),F.client,'All')}</select></div>
+ <div><label>Service</label><select data-f="service">${opts(Object.keys(SERVICES),F.service,'All')}</select></div>
+ <div><label>Financial Year</label><select data-f="fy">${opts(FYS,F.fy,'All')}</select></div>
+ <div><label>Payment Status</label><select data-f="status">${opts(STATUSES.map(s=>[s,STATUS_LABEL[s]]),F.status,'All')}</select></div>
+ <div><button class="btn sec" id="fClear">Clear filters</button></div></div>`}
+function bindFilters(){document.querySelectorAll('[data-f]').forEach(e=>e.onchange=()=>{F[e.dataset.f]=e.value;render()});
+ const c=$('#fClear');if(c)c.onclick=()=>{Object.keys(F).forEach(k=>F[k]='');render()}}
+
+/* ---------- views ---------- */
+let TAB='dashboard';
+const TABS=[['dashboard','Dashboard'],['invoices','Invoices'],['todos','To-do'],['clients','Clients'],['ledger','Ledger'],['pricing','Pricing']];
+function render(){
+ syncTodos();
+ const tn=S.todos.filter(t=>!t.done&&t.due&&t.due<=TODAY()).length;
+ $('#nav').innerHTML=TABS.map(([k,l])=>`<button class="${k===TAB?'on':''}" data-t="${esc(k)}">${l}${k==='todos'&&tn?`<span class="nb">${tn}</span>`:''}</button>`).join('');
+ $('#tabbar').innerHTML=$('#nav').innerHTML;
+ [$('#nav'),$('#tabbar')].forEach(n=>n.querySelectorAll('button').forEach(b=>b.onclick=()=>{TAB=b.dataset.t;render()}));
+ ({dashboard:vDash,invoices:vInv,todos:vTodos,clients:vClients,ledger:vLedger,pricing:vPricing})[TAB]();
+ updRem();
+ updG();if(gReady())setTimeout(gSyncAll,50);
+}
+function invTable(list,{showActions=true}={}){
+ if(!list.length)return '<div class="empty">No invoices match.</div>';
+ return `<div class="tw"><table><thead><tr><th>Invoice</th><th>Client</th><th>Service</th><th>Inv. date</th><th class="n">Amount</th><th class="n">Received</th><th class="n">Due amt</th><th>Due date</th><th class="n">Overdue days</th><th>Status</th></tr></thead><tbody>`+
+ list.map(i=>{const st=status(i),od=overdueDays(i);return `<tr class="click" data-i="${esc(i.id)}"><td>${esc(i.no)}</td><td>${esc(client(i.clientId).name)}</td>
+ <td class="w">${i.items.map(t=>`<div><b>${esc(t.service)}</b> · ${esc(t.type)}<div class="mut sm">${esc(detailText(t))}</div></div>`).join('')}</td><td>${fmtD(i.invoiceDate)}</td>
+ <td class="n">${inr(i.amount)}</td><td class="n">${inr(received(i))}</td><td class="n">${inr(remaining(i))}</td><td>${fmtD(i.dueDate)}</td>
+ <td class="n">${od?`<b style="color:var(--bad)">${od}</b>`:'—'}</td><td><span class="badge b-${st}">${STATUS_LABEL[st]}</span></td></tr>`}).join('')+'</tbody></table></div>';
+}
+function bindRows(){document.querySelectorAll('tr[data-i]').forEach(r=>r.onclick=()=>openInvoice(r.dataset.i))}
+
+function vDash(){
+ const L=filtered(),T=TODAY(),wk=addDays(T,7);
+ const sum=f=>L.reduce((a,i)=>a+f(i),0);
+ const open=L.filter(i=>remaining(i)>0),od=open.filter(i=>overdueDays(i)>0),pend=open.filter(i=>overdueDays(i)===0);
+ const clientsN=Object.values(F).some(Boolean)?new Set(L.map(i=>i.clientId)).size:S.clients.length;
+ const dueToday=open.filter(i=>i.dueDate===T),dueWeek=open.filter(i=>i.dueDate>T&&i.dueDate<=wk);
+ const pays=L.flatMap(i=>i.payments.map(p=>({...p,i}))).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,8);
+ const k=(l,v,c='')=>`<div class="card kpi ${c}"><div class="l">${l}</div><div class="v">${v}</div></div>`;
+ $('#main').innerHTML=filterBar()+`<div class="grid kpis">
+ ${k('Total Clients',clientsN)}${k('Services Sold',L.reduce((a,i)=>a+i.items.length,0))}${k('Total Invoice Value',inr(sum(i=>+i.amount)))}
+ ${k('Payments Received',inr(sum(received)),'ok')}${k('Total Outstanding',inr(sum(remaining)),'warn')}
+ ${k('Total Overdue',inr(od.reduce((a,i)=>a+remaining(i),0)),'bad')}
+ ${k('Pending Payments (not yet due)',pend.length)}${k('Overdue Payments',od.length,'bad')}
+ ${k('Due Today',dueToday.length+' · '+inr(dueToday.reduce((a,i)=>a+remaining(i),0)))}
+ ${k('Due in next 7 days',dueWeek.length+' · '+inr(dueWeek.reduce((a,i)=>a+remaining(i),0)))}</div>
+ <div class="grid two">
+ <div class="card"><h2>Overdue payments</h2>${od.length?`<div class="tw"><table><thead><tr><th>Client</th><th>Invoice</th><th class="n">Due amt</th><th>Due date</th><th class="n">Days</th></tr></thead><tbody>`+od.sort((a,b)=>overdueDays(b)-overdueDays(a)).map(i=>`<tr class="click" data-i="${esc(i.id)}"><td>${esc(client(i.clientId).name)}</td><td>${esc(i.no)} · ${esc(svcLabel(i))}</td><td class="n">${inr(remaining(i))}</td><td>${fmtD(i.dueDate)}</td><td class="n"><b style="color:var(--bad)">${overdueDays(i)}</b></td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">Nothing overdue.</div>'}</div>
+ <div class="card"><h2>Due today / this week</h2>${(dueToday.length+dueWeek.length)?`<div class="tw"><table><thead><tr><th>Client</th><th>Invoice</th><th class="n">Due amt</th><th>Due date</th></tr></thead><tbody>`+[...dueToday,...dueWeek].map(i=>`<tr class="click" data-i="${esc(i.id)}"><td>${esc(client(i.clientId).name)}</td><td>${esc(i.no)} · ${esc(svcLabel(i))}</td><td class="n">${inr(remaining(i))}</td><td>${i.dueDate===T?'<b>Today</b>':fmtD(i.dueDate)}</td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">Nothing due in the next 7 days.</div>'}</div>
+ <div class="card" style="grid-column:1/-1"><h2>Recent payments</h2>${pays.length?`<div class="tw"><table><thead><tr><th>Date</th><th>Client</th><th>Invoice</th><th>Mode</th><th class="n">Amount</th><th>Proof</th></tr></thead><tbody>`+pays.map(p=>`<tr class="click" data-i="${esc(p.i.id)}"><td>${fmtD(p.date)}</td><td>${esc(client(p.i.clientId).name)}</td><td>${esc(p.i.no)} · ${esc(svcLabel(p.i))}</td><td>${esc(p.mode)}</td><td class="n">${inr(p.amount)}</td><td>${p.proof?'✔':'—'}</td></tr>`).join('')+'</tbody></table></div>':'<div class="empty">No payments recorded yet.</div>'}</div>
+ </div>`;
+ bindFilters();bindRows();
+}
+function vInv(){
+ const L=filtered().sort((a,b)=>b.invoiceDate.localeCompare(a.invoiceDate)||b.no.localeCompare(a.no));
+ $('#main').innerHTML=filterBar()+`<div class="card"><h2>Invoices (${L.length}) — click a row to view, record payments or edit</h2>${invTable(L)}</div>`;
+ bindFilters();bindRows();
+}
+function vClients(){
+ const rows=S.clients.map(c=>{const L=S.invoices.filter(i=>i.clientId===c.id);const inv=L.reduce((a,i)=>a+ +i.amount,0),rec=L.reduce((a,i)=>a+received(i),0);
+  return `<tr><td><b>${esc(c.name)}</b><div class="mut sm">${esc(c.notes||'')}</div></td><td>${esc(c.phone||'')}<div class="mut sm">${esc(c.email||'')}</div></td><td class="n">${L.length}</td><td class="n">${inr(inv)}</td><td class="n">${inr(rec)}</td><td class="n"><b>${inr(inv-rec)}</b></td>
+  <td><button class="btn sec sm" data-ce="${esc(c.id)}">Edit</button> <button class="btn sec sm" data-cf="${esc(c.id)}">View invoices</button> <button class="btn sec sm" data-cl="${esc(c.id)}">Ledger</button></td></tr>`}).join('');
+ $('#main').innerHTML=`<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Clients (${S.clients.length})</h2><button class="btn" id="cNew">+ Add client</button></div>
+ ${S.clients.length?`<div class="tw"><table><thead><tr><th>Client</th><th>Contact</th><th class="n">Services</th><th class="n">Invoiced</th><th class="n">Received</th><th class="n">Outstanding</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">No clients yet.</div>'}</div>`;
+ $('#cNew').onclick=()=>clientForm();
+ document.querySelectorAll('[data-ce]').forEach(b=>b.onclick=()=>clientForm(b.dataset.ce));
+ document.querySelectorAll('[data-cl]').forEach(b=>b.onclick=()=>{LED={q:'',id:b.dataset.cl};TAB='ledger';render()});
+ document.querySelectorAll('[data-cf]').forEach(b=>b.onclick=()=>{Object.keys(F).forEach(k=>F[k]='');F.client=b.dataset.cf;TAB='invoices';render()});
+}
+function vPricing(){
+ const groups=Object.keys(SERVICES).map(svc=>{const rows=S.pricing.filter(p=>p.service===svc);
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">${svc}</h2><button class="btn sec sm" data-add="${esc(svc)}">+ Add ${esc(SERVICES[svc].typeLabel.toLowerCase())}</button></div>
+  <table><tbody>${rows.map(p=>`<tr><td style="width:55%"><input data-pn="${esc(p.id)}" value="${esc(p.type)}"></td><td><input type="number" min="0" step="1" data-pp="${esc(p.id)}" value="${esc(p.price)}"></td><td><button class="btn dng sm" data-pd="${esc(p.id)}">✕</button></td></tr>`).join('')||'<tr><td class="mut">None yet.</td></tr>'}</tbody></table></div>`}).join('');
+ $('#main').innerHTML=`<p class="mut" style="margin-top:0">Prices (₹) set here are auto-picked when creating an invoice. They can be overridden per invoice. Add your own sub-services (e.g. extra Tax Planning types) with the + button.</p><div class="grid two">${groups}</div>`;
+ document.querySelectorAll('[data-pp]').forEach(e=>e.onchange=()=>{S.pricing.find(p=>p.id===e.dataset.pp).price=+e.value||0;save()});
+ document.querySelectorAll('[data-pn]').forEach(e=>e.onchange=()=>{const p=S.pricing.find(p=>p.id===e.dataset.pn),old=p.type,nw=e.value.trim();if(!nw){e.value=old;return}
+  S.invoices.forEach(i=>i.items.forEach(t=>{if(t.service===p.service&&t.type===old)t.type=nw}));p.type=nw;save()});
+ document.querySelectorAll('[data-pd]').forEach(b=>b.onclick=()=>{if(confirm('Remove this price entry? Existing invoices keep their type and amount.')){S.pricing=S.pricing.filter(p=>p.id!==b.dataset.pd);save();render()}});
+ document.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{const n=prompt('Name:');if(n&&n.trim()){S.pricing.push({id:uid(),service:b.dataset.add,type:n.trim(),price:0});save();render()}});
+}
+
+/* ---------- dialogs ---------- */
+function show(title,html){$('#dt').textContent=title;$('#dbody').innerHTML=html;if(!dlg.open)dlg.showModal()}
+function clientForm(id,after){
+ const c=S.clients.find(x=>x.id===id)||{name:'',phone:'',email:'',notes:''};
+ show(id?'Edit client':'Add client',`<div class="f"><div class="full"><label>Client name *</label><input id="cn" value="${esc(c.name)}"></div>
+ <div><label>Phone</label><input id="cp" value="${esc(c.phone)}"></div><div><label>Email</label><input id="ce" value="${esc(c.email)}"></div>
+ <div class="full"><label>Notes</label><input id="cno" value="${esc(c.notes)}"></div></div>
+ <div class="row" style="margin-top:14px"><button class="btn" id="cs">Save</button>${id?'<button class="btn dng" id="cd">Delete</button>':''}</div>`);
+ $('#cs').onclick=()=>{const name=$('#cn').value.trim();if(!name)return alert('Name is required');
+  if(S.clients.some(x=>x.id!==id&&x.name.toLowerCase()===name.toLowerCase()))return alert('A client with this name already exists');
+  let o=c;if(!c.id){o={id:uid()};S.clients.push(o)}Object.assign(o,{name,phone:$('#cp').value,email:$('#ce').value,notes:$('#cno').value});
+  save();dlg.close();after?after(o.id):render()};
+ if(id)$('#cd').onclick=()=>{if(S.invoices.some(i=>i.clientId===id))return alert('This client has invoices. Delete those first.');if(confirm('Delete client?')){S.clients=S.clients.filter(x=>x.id!==id);save();dlg.close();render()}};
+}
+
+function invoiceForm(id,preset){
+ const ex=S.invoices.find(i=>i.id===id);
+ if(!S.clients.length){show('New invoice','<p>Add a client first.</p><button class="btn" id="ac">+ Add client</button>');$('#ac').onclick=()=>clientForm(null,()=>invoiceForm());return}
+ const cur=ex?{...ex,...(preset||{})}:{clientId:'',invoiceDate:TODAY(),dueDate:addDays(TODAY(),15),notes:'',...(preset||{})};
+ const blank=()=>({id:uid(),service:'ITR Filing',type:'',details:{},amount:'',touched:false});
+ let items=(preset&&preset.items)||(ex?ex.items.map(t=>({id:t.id||uid(),service:t.service,type:t.type,details:{...t.details},amount:t.amount,touched:true})):[blank()]);
+ show(ex?'Edit invoice '+ex.no:'New invoice',`<div class="f">
+ <div><label>Client *</label><div class="row" style="flex-wrap:nowrap"><select id="iC">${opts(S.clients.map(c=>[c.id,c.name]),cur.clientId,'Select client…')}</select><button class="btn sec sm" id="iAC" type="button">+ New</button></div></div>
+ <div><label>Invoice date *</label><input type="date" id="iD" value="${esc(cur.invoiceDate)}"></div>
+ <div><label>Payment due date *</label><input type="date" id="iDue" value="${esc(cur.dueDate)}"></div></div>
+ <h2 style="margin-top:16px">Services on this invoice</h2>
+ <div id="iItems"></div>
+ <div class="row" style="margin:4px 0 12px"><button class="btn sec sm" id="iAdd" type="button">+ Add another service</button><span class="sp"></span><b>Invoice total: <span id="iTot"></span></b></div>
+ <div class="f"><div class="full"><label>Notes / remarks</label><textarea id="iN" rows="2">${esc(cur.notes)}</textarea></div></div>
+ <div class="row" style="margin-top:14px"><button class="btn" id="iSave">${ex?'Save changes':'Create invoice'}</button></div>`);
+ const hintFor=t=>{const p=priceFor(t.service,t.type);return p?`Pricing Master: ${inr(p)}${+t.amount!==p?' (overridden)':''}`:'No price set in Pricing Master — enter manually'};
+ const updTot=()=>{$('#iTot').textContent=inr(items.reduce((a,t)=>a+(+t.amount||0),0))};
+ const itemHTML=(t,k)=>{const sv=SERVICES[t.service],ts=typesFor(t.service);
+  if(!ts.includes(t.type))t.type=ts[0]||'';
+  const p=priceFor(t.service,t.type);if(!t.touched&&p!==undefined)t.amount=p||'';
+  const extra=sv.extra.map(f=>{let v=t.details[f.k];if(v===undefined){v=f.k==='fy'&&f.req?fyOf(TODAY()):'';if(v)t.details[f.k]=v}v=v||'';
+   const lb=`<label>${f.l}${f.req?' *':''}</label>`;
+   if(f.kind==='fy')return `<div>${lb}<select data-x="fy">${opts(FYS,v,f.req?undefined:'—')}</select></div>`;
+   if(f.kind==='select')return `<div>${lb}<select data-x="${esc(f.k)}">${opts(f.opts,v)}</select></div>`;
+   if(f.kind==='textarea')return `<div class="full">${lb}<textarea data-x="${esc(f.k)}" rows="2">${esc(v)}</textarea></div>`;
+   return `<div>${lb}<input type="${f.kind}" data-x="${esc(f.k)}" value="${esc(v)}"></div>`}).join('');
+  return `<div class="card" style="margin-bottom:10px" data-k="${esc(k)}"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>Service ${k+1}</b>${items.length>1?`<button class="btn dng sm" data-rm="${esc(k)}" type="button">Remove</button>`:''}</div><div class="f">
+   <div><label>Type of service *</label><select data-s="service">${opts(Object.keys(SERVICES),t.service)}</select></div>
+   <div><label>${sv.typeLabel} *</label><select data-s="type">${opts(ts,t.type)}</select></div>
+   ${extra}
+   <div><label>Amount (₹) *</label><input type="number" min="0" step="1" data-s="amount" value="${esc(t.amount)}"><div class="hint">${esc(hintFor(t))}</div></div></div></div>`};
+ const draw=()=>{$('#iItems').innerHTML=items.map(itemHTML).join('');updTot()};
+ const box=$('#iItems');
+ box.onchange=e=>{const el=e.target,k=+el.closest('[data-k]').dataset.k,t=items[k];
+  if(el.dataset.s==='service'){t.service=el.value;t.type='';t.details={};t.touched=false;draw()}
+  else if(el.dataset.s==='type'){t.type=el.value;t.touched=false;draw()}
+  else if(el.dataset.x){t.details[el.dataset.x]=el.value.trim();
+   if(el.dataset.x==='period'&&el.value&&SERVICES[t.service].extra.some(f=>f.k==='fy')){t.details.fy=fyFromMonth(el.value);draw()}}};
+ box.oninput=e=>{const el=e.target;if(el.dataset.s!=='amount')return;const k=+el.closest('[data-k]').dataset.k,t=items[k];
+  t.amount=el.value;t.touched=true;el.nextElementSibling.textContent=hintFor(t);updTot()};
+ box.onclick=e=>{const b=e.target.closest('[data-rm]');if(b){items.splice(+b.dataset.rm,1);draw()}};
+ $('#iAdd').onclick=()=>{items.push(blank());draw()};
+ $('#iD').onchange=()=>{if(!ex)$('#iDue').value=addDays($('#iD').value,15)};
+ $('#iAC').onclick=()=>{const keep={invoiceDate:$('#iD').value,dueDate:$('#iDue').value,notes:$('#iN').value,items:items.map(t=>({...t,details:{...t.details}}))};clientForm(null,cid=>invoiceForm(id,{...keep,clientId:cid}))};
+ draw();
+ $('#iSave').onclick=()=>{
+  let bad='';
+  if(!$('#iC').value)bad='Client';if(!$('#iD').value)bad='Invoice date';if(!$('#iDue').value)bad='Due date';
+  items.forEach((t,k)=>{const w='Service '+(k+1)+': ';
+   if(!t.type)bad=w+SERVICES[t.service].typeLabel+' (add one in Pricing Master)';
+   SERVICES[t.service].extra.forEach(f=>{if(f.req&&!t.details[f.k])bad=w+f.l});
+   if(t.service==='GST Filing'&&['GSTR-1','GSTR-3B'].includes(t.type)&&!t.details.period)bad=w+'Month / Return Period';
+   if(t.amount===''||!(+t.amount>=0))bad=w+'Amount'});
+  if(bad)return alert('Please fill: '+bad);
+  const list=items.map(({touched,...t})=>({...t,amount:+t.amount}));
+  const data={clientId:$('#iC').value,invoiceDate:$('#iD').value,dueDate:$('#iDue').value,items:list,amount:list.reduce((a,t)=>a+t.amount,0),notes:$('#iN').value};
+  if(ex){Object.assign(ex,data);save();dlg.close();render();openInvoice(ex.id)}
+  else{S.seq=Math.max(S.seq,...S.invoices.map(x=>(+x.no.replace(/\D/g,'')||0)+1));const inv={id:uid(),no:'INV-'+String(S.seq++).padStart(4,'0'),payments:[],createdAt:TODAY(),...data};S.invoices.push(inv);save();dlg.close();render();openInvoice(inv.id)}
+ };
+}
+
+function openInvoice(id){
+ const i=S.invoices.find(x=>x.id===id);if(!i)return;
+ const st=status(i),od=overdueDays(i);
+ const prow=i.payments.slice().sort((a,b)=>a.date.localeCompare(b.date)).map((p,n)=>`<tr><td>${n+1}</td><td>${fmtD(p.date)}</td><td class="n">${inr(p.amount)}</td><td>${esc(p.mode)}</td><td>${p.proof?`<a class="lnk" data-pv="${esc(p.id)}">${esc(p.proof.name||'View')}</a>`:'<span class="mut">—</span>'}</td><td class="w">${esc(p.note||'')}</td><td><button class="btn dng sm" data-pd="${esc(p.id)}">Delete</button></td></tr>`).join('');
+ show(`${i.no} · ${client(i.clientId).name}`,`
+ <div class="row"><span class="badge b-${st}">${STATUS_LABEL[st]}</span>${od?`<b style="color:var(--bad)">${od} day${od>1?'s':''} overdue</b>`:''}<span class="sp"></span>
+  <button class="btn sec sm" id="oE">Edit invoice</button><button class="btn dng sm" id="oD">Delete</button></div>
+ <div class="tw" style="margin-top:10px"><table><thead><tr><th>Service</th><th>Details</th><th class="n">Amount</th></tr></thead><tbody>${i.items.map(t=>`<tr><td><b>${esc(t.service)}</b> · ${esc(t.type)}</td><td class="w mut">${esc(detailText(t))}</td><td class="n">${inr(t.amount)}</td></tr>`).join('')}</tbody></table></div>
+ <div class="sum">${i.createdAt?`<div class="mut">Added on<b>${fmtD(i.createdAt)}</b></div>`:''}<div class="mut">Invoice date<b>${fmtD(i.invoiceDate)}</b></div><div class="mut">Due date<b>${fmtD(i.dueDate)}</b></div>
+  <div class="mut">Invoice amount<b>${inr(i.amount)}</b></div><div class="mut">Total received<b style="color:var(--ok)">${inr(received(i))}</b></div><div class="mut">Remaining due<b style="color:${remaining(i)?'var(--bad)':'var(--ok)'}">${inr(remaining(i))}</b></div></div>
+ ${i.notes?`<p class="sm mut">Notes: ${esc(i.notes)}</p>`:''}
+ <h2>Payments received</h2>
+ ${i.payments.length?`<div class="tw"><table><thead><tr><th>#</th><th>Date</th><th class="n">Amount</th><th>Mode</th><th>Proof</th><th>Note</th><th></th></tr></thead><tbody>${prow}</tbody></table></div>`:'<div class="empty">No payments yet.</div>'}
+ ${remaining(i)>0?`<div class="card" style="margin-top:12px"><h2>Record a payment</h2><div class="f">
+  <div><label>Amount received (₹) *</label><input type="number" min="1" step="0.01" id="pA" value="${esc(remaining(i))}"></div>
+  <div><label>Payment date *</label><input type="date" id="pD" value="${esc(TODAY())}"></div>
+  <div><label>Payment mode</label><select id="pM">${opts(MODES)}</select></div>
+  <div><label>Screenshot / proof (image or PDF)</label><input type="file" id="pF" accept="image/*,application/pdf"></div>
+  <div class="full"><label>Note</label><input id="pN" placeholder="e.g. UTR / reference"></div></div>
+  <div class="row" style="margin-top:10px"><button class="btn" id="pS">Add payment</button></div></div>`:''}`);
+ $('#oE').onclick=()=>invoiceForm(i.id);
+ $('#oD').onclick=()=>{if(confirm(`Delete ${i.no} and its ${i.payments.length} payment(s)? This cannot be undone.`)){removeProofs(i.payments.map(p=>p.proof&&p.proof.path));S.invoices=S.invoices.filter(x=>x.id!==i.id);save();dlg.close();render()}};
+ document.querySelectorAll('[data-pd]').forEach(b=>b.onclick=()=>{if(confirm('Delete this payment entry?')){const q=i.payments.find(p=>p.id===b.dataset.pd);removeProofs([q.proof&&q.proof.path]);i.payments=i.payments.filter(p=>p.id!==b.dataset.pd);save();render();openInvoice(i.id)}});
+ document.querySelectorAll('[data-pv]').forEach(a=>a.onclick=()=>viewProof(i.payments.find(p=>p.id===a.dataset.pv).proof));
+ const ps=$('#pS');if(ps)ps.onclick=async()=>{
+  const amt=+$('#pA').value;if(!(amt>0))return alert('Enter a valid amount');
+  if(amt>remaining(i)+0.005&&!confirm(`Amount exceeds remaining due (${inr(remaining(i))}). Record anyway?`))return;
+  if(!$('#pD').value)return alert('Enter payment date');
+  const pid=uid();let proof=null;const f=$('#pF').files[0];
+  ps.disabled=true;ps.textContent='Saving…';
+  if(f){try{proof=await uploadProof(f,i.id,pid)}catch(e){ps.disabled=false;ps.textContent='Add payment';return alert('Proof upload failed: '+(e.message||e))}}
+  i.payments.push({id:pid,amount:amt,date:$('#pD').value,mode:$('#pM').value,note:$('#pN').value,proof});
+  save();render();openInvoice(i.id)};
+}
+function compressImage(f){return new Promise((res,rej)=>{
+ const url=URL.createObjectURL(f),im=new Image();
+ im.onload=()=>{const k=Math.min(1,1600/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;
+  c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(url);c.toBlob(b=>b?res(b):rej(new Error('Could not compress image')),'image/jpeg',.82)};
+ im.onerror=()=>rej(new Error('Could not read image'));im.src=url})}
+async function viewProof(p){
+ const{data,error}=await sb.storage.from(BUCKET).createSignedUrl(p.path,600);if(error)return alert('Could not open proof: '+error.message);
+ const pdf=p.path.endsWith('.pdf');
+ show('Payment proof — '+p.name,pdf?`<iframe src="${esc(data.signedUrl)}" style="width:100%;height:70vh;border:0"></iframe>`:`<img src="${esc(data.signedUrl)}" style="max-width:100%;border-radius:8px">`)}
+
+/* ---------- reminders: unpaid invoices 30+ days after they were added (only invoices created in this tool, i.e. with createdAt) ---------- */
+const REMIND_DAYS=30;
+const ageDays=i=>dnum(TODAY())-dnum(i.createdAt);
+const dueReminders=()=>S.invoices.filter(i=>i.createdAt&&remaining(i)>0&&ageDays(i)>=REMIND_DAYS).sort((a,b)=>ageDays(b)-ageDays(a));
+const lsGet=k=>{try{return localStorage.getItem(k)}catch{return null}},lsSet=(k,v)=>{try{localStorage.setItem(k,v)}catch{}};
+function updRem(){const b=$('#bRem'),n=dueReminders().length;b.style.display=n&&signedIn?'':'none';b.textContent=`⏰ ${n} payment reminder${n>1?'s':''}`}
+function showReminders(force){
+ const L=dueReminders();if(!L.length||dlg.open)return;
+ if(!force&&lsGet('remind-dismissed')===TODAY())return;
+ show(`⏰ ${L.length} unpaid invoice${L.length>1?'s':''} — ${REMIND_DAYS}+ days since added`,
+ `<p class="mut" style="margin-top:0">These invoices were added at least ${REMIND_DAYS} days ago and still have an amount due. Click one to open it and record a payment.</p>
+ <div class="tw"><table><thead><tr><th>Invoice</th><th>Client</th><th>Services</th><th>Added on</th><th class="n">Days</th><th class="n">Amount due</th></tr></thead><tbody>`+
+ L.map(i=>`<tr class="click" data-r="${esc(i.id)}"><td>${esc(i.no)}</td><td>${esc(client(i.clientId).name)}</td><td class="w">${esc(svcLabel(i))}</td><td>${fmtD(i.createdAt)}</td><td class="n"><b style="color:var(--bad)">${ageDays(i)}</b></td><td class="n">${inr(remaining(i))}</td></tr>`).join('')+
+ `</tbody></table></div><div class="row" style="margin-top:14px"><button class="btn" id="rD">Dismiss for today</button><span class="mut sm">Reappears tomorrow until paid. Reopen anytime from the ⏰ button.</span></div>`);
+ document.querySelectorAll('[data-r]').forEach(r=>r.onclick=()=>openInvoice(r.dataset.r));
+ $('#rD').onclick=()=>{lsSet('remind-dismissed',TODAY());dlg.close()}}
+$('#bRem').onclick=()=>showReminders(true);
+setInterval(()=>{if(signedIn){updRem();showReminders()}},3600e3);
+
+/* ---------- smart to-do ---------- */
+const MONS=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+const MONRE='january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec';
+const WDRE='sunday|monday|tuesday|wednesday|thursday|friday|saturday|sun|mon|tues|tue|wed|thurs|thur|thu|fri|sat';
+const mkDate=(d,m,y)=>{d=+d;m=+m;if(m<1||m>12||d<1||d>31)return '';const T=TODAY();let yy=y?(+y<100?2000+ +y:+y):+T.slice(0,4);
+ const f=yy=>`${yy}-${pad(m)}-${pad(d)}`;let r=f(yy);if(!y&&r<T)r=f(++yy);return new Date(Date.UTC(yy,m-1,d)).getUTCMonth()===m-1?r:''};
+/* "Call Ramesh tomorrow !" / "File GSTR-3B 20 oct" / "Follow up fri" -> {title,due,pri} */
+function parseTask(raw){
+ let t=' '+raw+' ',due='',pri=0,time='',invite='';const T=TODAY();
+ const take=(re,fn)=>{const m=t.match(re);if(!m)return false;const v=fn(m);if(!v)return false;t=t.replace(m[0],' ');return true};
+ const D=v=>{if(v)due=v;return v};
+ take(/\s(!+|urgent|asap)(?=\s)/i,()=>{pri=1;return 1});
+ take(/\s(?:(?:invite|add to|cc|share with|with)\s+)?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)(?=\s)/i,m=>{invite=m[1].toLowerCase();return 1});
+ take(/\s(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s?(am|pm)(?=\s)/i,m=>{let h=+m[1];if(h<1||h>12)return false;const pm=m[3].toLowerCase()==='pm';if(pm&&h<12)h+=12;if(!pm&&h===12)h=0;time=pad(h)+':'+(m[2]||'00');return 1})||
+ take(/\s(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)(?=\s)/,m=>{time=pad(+m[1])+':'+m[2];return 1});
+ take(/\s(today|tonight)(?=\s)/i,()=>D(T))||
+ take(/\s(tomorrow|tmrw|tmr)(?=\s)/i,()=>D(addDays(T,1)))||
+ take(/\sin (\d{1,3}) days?(?=\s)/i,m=>D(addDays(T,+m[1])))||
+ take(/\snext week(?=\s)/i,()=>D(addDays(T,7)))||
+ take(new RegExp('\\s(\\d{1,2})(?:st|nd|rd|th)?[\\s-]+('+MONRE+')(?:[\\s-]+(\\d{4}))?(?=\\s)','i'),m=>D(mkDate(m[1],MONS.indexOf(m[2].slice(0,3).toLowerCase())+1,m[3])))||
+ take(new RegExp('\\s('+MONRE+')\\s+(\\d{1,2})(?:st|nd|rd|th)?(?=\\s)','i'),m=>D(mkDate(m[2],MONS.indexOf(m[1].slice(0,3).toLowerCase())+1)))||
+ take(/\s(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?=\s)/,m=>D(mkDate(m[1],m[2],m[3])))||
+ take(new RegExp('\\s(?:on |this |next )?('+WDRE+')(?=\\s)','i'),m=>{const w=['sun','mon','tue','wed','thu','fri','sat'].indexOf(m[1].slice(0,3).toLowerCase());
+  const cur=new Date(dnum(T)*864e5).getUTCDay();return D(addDays(T,((w-cur+7)%7)||7))});
+ let title=t.replace(/\s+(by|on|due on|due|before|at)\s*$/i,' ').replace(/\s+/g,' ').trim();
+ if(time&&!due)due=T;return {title:title||raw.trim(),due,time,invite,pri};
+}
+const dueLabel=d=>d===TODAY()?'Today':d===addDays(TODAY(),1)?'Tomorrow':d===addDays(TODAY(),-1)?'Yesterday':fmtD(d);
+const fmtTime=h=>{const[a,b]=h.split(':').map(Number);return `${a%12||12}:${pad(b)} ${a<12?'AM':'PM'}`};
+const newTodo=(o)=>({id:uid(),title:'',due:'',time:'',invite:'',gcalId:'',pri:0,invoiceId:'',done:false,createdAt:new Date().toISOString(),...o});
+/* tasks linked to an invoice complete themselves once that invoice is fully paid */
+function syncTodos(){let ch=false;S.todos.forEach(t=>{if(!t.done&&t.invoiceId){const i=S.invoices.find(x=>x.id===t.invoiceId);if(i&&remaining(i)<=0){t.done=true;t.auto=true;t.doneAt=new Date().toISOString();ch=true}}});if(ch&&signedIn)save()}
+function suggestions(){
+ const linked=new Set(S.todos.filter(t=>t.invoiceId&&(!t.done||(t.doneAt&&Date.now()-Date.parse(t.doneAt)<7*864e5))).map(t=>t.invoiceId));
+ return S.invoices.filter(i=>remaining(i)>0&&!linked.has(i.id)&&(overdueDays(i)>0||(i.createdAt&&ageDays(i)>=REMIND_DAYS)))
+  .sort((a,b)=>overdueDays(b)-overdueDays(a)||remaining(b)-remaining(a))}
+const sugTodo=i=>newTodo({title:`Follow up: ${client(i.clientId).name} — ${i.no}${overdueDays(i)?` (${overdueDays(i)}d overdue)`:''}`,due:TODAY(),pri:overdueDays(i)>=30?1:0,invoiceId:i.id});
+
+/* ---------- party ledger: search a party, see every invoice (Dr) and payment (Cr) with a running balance ---------- */
+let LED={q:'',id:''};
+const partyTotals=c=>{const L=S.invoices.filter(i=>i.clientId===c.id);return{n:L.length,dr:L.reduce((a,i)=>a+i.amount,0),cr:L.reduce((a,i)=>a+received(i),0)}};
+const balTxt=b=>inr(Math.abs(b))+(b>0?' Dr':b<0?' Cr':'');
+function partyMatches(q){
+ const toks=q.toLowerCase().split(/\s+/).filter(Boolean);
+ if(!toks.length)return S.clients.slice().sort((a,b)=>{const x=partyTotals(a),y=partyTotals(b);return (y.dr-y.cr)-(x.dr-x.cr)||a.name.localeCompare(b.name)});
+ return S.clients.filter(c=>{const h=[c.name,c.phone,c.email,c.notes].join(' ').toLowerCase();return toks.every(t=>h.includes(t))})
+  .sort((a,b)=>(+b.name.toLowerCase().startsWith(toks[0]))-(+a.name.toLowerCase().startsWith(toks[0]))||a.name.localeCompare(b.name))}
+function ledgerRows(c){
+ const rows=[];
+ S.invoices.filter(i=>i.clientId===c.id).forEach(i=>{
+  rows.push({d:i.invoiceDate,o:0,ref:i.no,part:'Invoice — '+i.items.map(t=>t.service+' · '+t.type).join(', '),dr:i.amount,cr:0,inv:i.id});
+  i.payments.forEach(p=>rows.push({d:p.date,o:1,ref:i.no,part:'Payment received ('+p.mode+')'+(p.note?' — '+p.note:''),dr:0,cr:p.amount,inv:i.id}))});
+ rows.sort((a,b)=>a.d.localeCompare(b.d)||a.o-b.o||a.ref.localeCompare(b.ref));
+ let bal=0;rows.forEach(r=>{bal+=r.dr-r.cr;r.bal=bal});return rows}
+const csvCell=v=>{if(typeof v==='number')return String(v);let t=String(v??'');if(/^[=+\-@\t\r]/.test(t))t="'"+t;return /[",\n\r]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t};
+function ledgerCsv(c){
+ const rows=ledgerRows(c),tot=partyTotals(c);
+ const lines=[['Ledger',c.name],['As on',TODAY()],[],['Date','Particulars','Ref','Debit','Credit','Balance (Dr+/Cr-)']];
+ rows.forEach(r=>lines.push([r.d,r.part,r.ref,r.dr||'',r.cr||'',r.bal]));
+ lines.push([],['','Total','',tot.dr,tot.cr,tot.dr-tot.cr]);
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+lines.map(l=>l.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}));
+ a.download=`ledger-${c.name.replace(/[^A-Za-z0-9]+/g,'_').slice(0,40)}-${TODAY()}.csv`;a.click()}
+function vLedger(){
+ $('#main').innerHTML=`<div class="card noprint" id="lsearch"><label>Search party</label><input id="lq" type="search" placeholder="Type a name, phone or email…" autocomplete="off" value="${esc(LED.q)}"><div class="hint">Pick a party to open its ledger — every invoice (debit) and payment (credit) with a running balance.</div></div><div id="lbody" style="margin-top:14px"></div>`;
+ const inp=$('#lq');
+ inp.oninput=()=>{LED.q=inp.value;LED.id='';drawLedger()};
+ inp.onkeydown=e=>{if(e.key==='Enter'){const m=partyMatches(LED.q);if(m[0]){LED.id=m[0].id;drawLedger()}}};
+ drawLedger();if(!LED.id&&!matchMedia('(pointer:coarse)').matches)inp.focus()}
+function drawLedger(){
+ const body=$('#lbody'),c=LED.id&&S.clients.find(x=>x.id===LED.id);
+ if(!c){
+  const list=partyMatches(LED.q).slice(0,60);
+  body.innerHTML=`<div class="card"><h2>${LED.q.trim()?`Parties matching “${esc(LED.q.trim())}”`:'All parties — highest balance first'} <span class="mut" style="font-weight:500">${list.length}</span></h2>`+
+   (list.length?`<div class="tw"><table><thead><tr><th>Party</th><th>Contact</th><th class="n">Invoices</th><th class="n">Invoiced (Dr)</th><th class="n">Received (Cr)</th><th class="n">Balance</th></tr></thead><tbody>`+
+    list.map(p=>{const t=partyTotals(p);return `<tr class="click" data-lp="${esc(p.id)}"><td><b>${esc(p.name)}</b></td><td>${esc(p.phone||'')}<div class="mut sm">${esc(p.email||'')}</div></td><td class="n">${t.n}</td><td class="n">${inr(t.dr)}</td><td class="n">${inr(t.cr)}</td><td class="n"><b>${balTxt(t.dr-t.cr)}</b></td></tr>`}).join('')+`</tbody></table></div>`
+   :'<div class="empty">No party matches. Try a shorter name.</div>')+'</div>';
+  body.querySelectorAll('[data-lp]').forEach(r=>r.onclick=()=>{LED.id=r.dataset.lp;drawLedger();scrollTo(0,0)});return}
+ const rows=ledgerRows(c),t=partyTotals(c);
+ body.innerHTML=`<div class="card"><div class="row noprint" style="margin-bottom:10px"><button class="btn sec sm" id="lBack">← All parties</button><span class="sp"></span><button class="btn sec sm" id="lNew">+ Invoice</button><button class="btn sec sm" id="lInv">Invoices</button><button class="btn sec sm" id="lCsv">Download CSV</button><button class="btn sm" id="lPrint">Print / PDF</button></div>
+  <h2 style="margin-bottom:2px">${esc(c.name)} — Ledger</h2><div class="mut sm">${esc([c.phone,c.email].filter(Boolean).join(' · '))}${c.notes?' · '+esc(c.notes):''} · as on ${fmtD(TODAY())}</div>
+  <div class="sum"><div class="mut">Total invoiced (Dr)<b>${inr(t.dr)}</b></div><div class="mut">Total received (Cr)<b style="color:var(--ok)">${inr(t.cr)}</b></div><div class="mut">${t.dr-t.cr<0?'Advance (Cr)':'Outstanding (Dr)'}<b style="color:${t.dr-t.cr>0?'var(--bad)':'var(--ok)'}">${inr(Math.abs(t.dr-t.cr))}</b></div></div>`+
+  (rows.length?`<div class="tw"><table class="led"><thead><tr><th>Date</th><th>Particulars</th><th>Ref</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead><tbody>`+
+   rows.map(r=>`<tr class="click" data-li="${esc(r.inv)}"><td>${fmtD(r.d)}</td><td class="w">${esc(r.part)}</td><td>${esc(r.ref)}</td><td class="n">${r.dr?inr(r.dr):''}</td><td class="n">${r.cr?inr(r.cr):''}</td><td class="n">${balTxt(r.bal)}</td></tr>`).join('')+
+   `<tr><td></td><td><b>Total</b></td><td></td><td class="n"><b>${inr(t.dr)}</b></td><td class="n"><b>${inr(t.cr)}</b></td><td class="n"><b>${balTxt(t.dr-t.cr)}</b></td></tr></tbody></table></div>`
+  :'<div class="empty">No invoices or payments for this party yet.</div>')+'</div>';
+ $('#lBack').onclick=()=>{LED.id='';drawLedger()};
+ $('#lNew').onclick=()=>invoiceForm(undefined,{clientId:c.id});
+ $('#lInv').onclick=()=>{Object.keys(F).forEach(k=>F[k]='');F.client=c.id;TAB='invoices';render()};
+ $('#lCsv').onclick=()=>ledgerCsv(c);$('#lPrint').onclick=()=>print();
+ body.querySelectorAll('[data-li]').forEach(r=>r.onclick=()=>openInvoice(r.dataset.li))}
+
+/* ---------- Google Calendar / .ics ---------- */
+const calUrl=t=>{const d=t.due.replace(/-/g,''),n=addDays(t.due,1).replace(/-/g,'');const i=t.invoiceId&&S.invoices.find(x=>x.id===t.invoiceId);
+ const det=(i&&!t.invite?`Invoice ${i.no}\n`:'')+'From Service Billing Tool';
+ return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text='+encodeURIComponent((t.pri?'! ':'')+t.title)+'&dates='+d+'/'+n+'&details='+encodeURIComponent(det)+(t.invite?'&add='+encodeURIComponent(t.invite):'')};
+const icsEsc=x=>String(x).replace(/\\/g,'\\\\').replace(/[,;]/g,m=>'\\'+m).replace(/\n/g,'\\n');
+function buildIcs(list){const stamp=new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
+ const ev=t=>['BEGIN:VEVENT',`UID:${t.id}@service-billing-tool`,`DTSTAMP:${stamp}`,`DTSTART;VALUE=DATE:${t.due.replace(/-/g,'')}`,`DTEND;VALUE=DATE:${addDays(t.due,1).replace(/-/g,'')}`,
+  `SUMMARY:${icsEsc((t.pri?'! ':'')+t.title)}`,'BEGIN:VALARM','ACTION:DISPLAY',`DESCRIPTION:${icsEsc(t.title)}`,'TRIGGER:PT9H','END:VALARM','END:VEVENT'].join('\r\n');
+ return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Service Billing Tool//EN','CALSCALE:GREGORIAN',...list.map(ev),'END:VCALENDAR'].join('\r\n')}
+function exportIcs(){const list=S.todos.filter(t=>!t.done&&t.due);if(!list.length)return alert('No open tasks with a due date to export.');
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buildIcs(list)],{type:'text/calendar'}));a.download='billing-todos.ics';a.click()}
+
+/* ---------- Google Calendar auto-sync (browser -> Google Calendar API, token model) ---------- */
+const G={tok:null,exp:0,msg:'',busy:false};
+const gReady=()=>!!G.tok&&Date.now()<G.exp-60000;
+const gForget=t=>{if(t&&t.gcalId)S.gdel.push(t.gcalId)};
+const gSig=t=>[t.title,t.due,t.time||'',t.pri?1:0,t.done?1:0,t.invoiceId||''].join('|')+(t.invite?'|'+t.invite:'');
+const okEmail=e=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+function updG(){const b=$('#tG');if(!b)return;
+ b.textContent=!cfg.googleClientId?'📅 Auto-sync to Google Calendar':gReady()?'✓ Google Calendar connected':'📅 Connect Google Calendar';
+ b.title=G.msg||''}
+async function gapi(method,path,body){
+ const r=await fetch('https://www.googleapis.com/calendar/v3'+path,{method,headers:{Authorization:'Bearer '+G.tok,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+ if(r.status===401){G.tok=null;updG();throw new Error('Google session expired — click Connect again')}
+ if(r.status===204)return{};if(r.status===404||r.status===410)return{gone:true};
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error((j.error&&j.error.message)||('Google error '+r.status));return j}
+function gEvent(t){
+ const i=t.invoiceId&&S.invoices.find(x=>x.id===t.invoiceId);
+ /* when a guest is invited, invoice/client details are NOT put in the event text */
+ const ev={summary:(t.pri?'! ':'')+t.title,description:(i&&!t.invite?`Invoice ${i.no}\n`:'')+'From Service Billing Tool',attendees:t.invite?[{email:t.invite}]:[]};
+ if(t.time){const tz=Intl.DateTimeFormat().resolvedOptions().timeZone,e=new Date(`${t.due}T${t.time}:00`);e.setMinutes(e.getMinutes()+30);
+  ev.start={dateTime:`${t.due}T${t.time}:00`,timeZone:tz};ev.end={dateTime:`${iso(e)}T${pad(e.getHours())}:${pad(e.getMinutes())}:00`,timeZone:tz};
+  ev.reminders={useDefault:false,overrides:[{method:'popup',minutes:10}]}}
+ else{ev.start={date:t.due};ev.end={date:addDays(t.due,1)};ev.reminders={useDefault:true}}
+ return ev}
+async function gSyncAll(){
+ if(!gReady()||G.busy)return;G.busy=true;let ch=false;
+ try{
+  for(const id of S.gdel.slice()){await gapi('DELETE','/calendars/primary/events/'+encodeURIComponent(id)+'?sendUpdates=all');S.gdel=S.gdel.filter(x=>x!==id);ch=true}
+  for(const t of S.todos){const sig=gSig(t);if(t.gSig===sig)continue;
+   if(!t.done&&t.due){
+    if(t.gcalId){const r=await gapi('PATCH','/calendars/primary/events/'+encodeURIComponent(t.gcalId)+'?sendUpdates=all',gEvent(t));if(r.gone)t.gcalId=''}
+    if(!t.gcalId){const r=await gapi('POST','/calendars/primary/events?sendUpdates=all',gEvent(t));t.gcalId=r.id}
+   }else if(t.gcalId){await gapi('DELETE','/calendars/primary/events/'+encodeURIComponent(t.gcalId)+'?sendUpdates=all');t.gcalId=''}
+   t.gSig=sig;ch=true}
+  G.msg='Synced '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});setStat('Google Calendar synced')
+ }catch(e){G.msg=e.message;setStat('Calendar: '+e.message,1)}
+ finally{G.busy=false;if(ch)save();updG()}}
+function gConnect(){
+ if(!(window.google&&google.accounts&&google.accounts.oauth2))return alert('Google sign-in is still loading (or blocked). Check your internet and try again.');
+ const tc=google.accounts.oauth2.initTokenClient({client_id:cfg.googleClientId,scope:'https://www.googleapis.com/auth/calendar.events',
+  callback:r=>{if(r.error){G.msg=r.error;return updG()}G.tok=r.access_token;G.exp=Date.now()+(+r.expires_in||3600)*1000;lsSet('g-on','1');updG();gSyncAll()},
+  error_callback:e=>{G.msg=e.message||e.type;updG()}});
+ tc.requestAccessToken({prompt:lsGet('g-on')?'':'consent'})}
+function gClick(){
+ if(!cfg.googleClientId)return gSetupHelp();
+ if(!gReady())return gConnect();
+ show('Google Calendar',`<p style="margin-top:0">Connected. Tasks with a due date are added to your <b>primary</b> Google Calendar automatically when you create, change, complete or delete them (while this page is open and connected).</p>
+ <ul style="padding-left:20px;line-height:1.7"><li>Task with a <b>time</b> (e.g. “call Ramesh fri 5pm”) → timed event with a popup 10 minutes before.</li><li>Task with only a <b>date</b> → all-day event using your calendar’s default notifications.</li><li>Google’s sign-in lasts about an hour — if the button says Connect again, click it.</li></ul>
+ <p class="sm mut">${esc(G.msg)}</p><div class="row"><button class="btn" id="gS">Sync now</button><button class="btn dng" id="gD">Disconnect</button></div>`);
+ $('#gS').onclick=()=>{S.todos.forEach(t=>t.gSig='');dlg.close();gSyncAll()};
+ $('#gD').onclick=()=>{try{google.accounts.oauth2.revoke(G.tok)}catch{}G.tok=null;lsSet('g-on','');dlg.close();updG()}}
+function gSetupHelp(){
+ show('Set up Google Calendar auto-sync (one time, ~10 min)',`<ol style="padding-left:20px;line-height:1.75;margin-top:0">
+ <li>Open <b>console.cloud.google.com</b> → create a project (e.g. “Billing”).</li>
+ <li><b>APIs &amp; Services → Library</b> → search <b>Google Calendar API</b> → <b>Enable</b>.</li>
+ <li><b>Google Auth Platform</b> (or “OAuth consent screen”) → <b>Get started</b>: app name “Billing”, your email, audience <b>External</b>. Then <b>Audience → Test users → Add</b> your Google email.</li>
+ <li><b>Credentials → Create credentials → OAuth client ID</b> → type <b>Web application</b> → under <b>Authorized JavaScript origins</b> add <code>https://pratikgit0227.github.io</code> → <b>Create</b>.</li>
+ <li>Copy the <b>Client ID</b> (ends in <code>.apps.googleusercontent.com</code>) and send it to Claude, who adds it to <code>config.js</code>. It is safe to share — it is not a secret.</li></ol>
+ <p class="sm mut">Google will say “app not verified” the first time — click Advanced → Continue. That is normal for a personal app in testing mode.</p>`)}
+
+function vTodos(){
+ const T=TODAY(),open=S.todos.filter(t=>!t.done),done=S.todos.filter(t=>t.done).sort((a,b)=>(b.doneAt||'').localeCompare(a.doneAt||''));
+ const srt=(a,b)=>(+!!b.pri)-(+!!a.pri)||(a.due||'9').localeCompare(b.due||'9')||a.createdAt.localeCompare(b.createdAt);
+ const inv=t=>t.invoiceId&&S.invoices.find(i=>i.id===t.invoiceId);
+ const row=t=>{const i=inv(t),chips=[];
+  if(t.due&&!t.done)chips.push(`<span class="chip ${t.due<T?'bad':t.due===T?'today':''}">${esc(dueLabel(t.due))}${t.time?' · '+fmtTime(t.time):''}</span>`);
+  if(i)chips.push(`<span class="chip inv" data-iv="${esc(i.id)}">${esc(i.no)} · ${esc(client(i.clientId).name)}${remaining(i)>0?' · '+inr(remaining(i))+' due':' · paid ✓'}</span>`);
+  if(t.invite)chips.push(`<span class="chip" title="Invited to this calendar event">✉ ${esc(t.invite)}</span>`);
+  if((t.attachments||[]).length)chips.push(`<span class="chip inv" data-at="${esc(t.id)}">📎 ${t.attachments.length}</span>`);
+  if(t.auto)chips.push('<span class="chip">auto-completed: invoice paid</span>');
+  return `<div class="todo ${t.done?'done':''}" data-t="${esc(t.id)}"><button class="chk" data-c="${esc(t.id)}" aria-label="Toggle complete"></button><div class="tb" data-e="${esc(t.id)}"><div class="tt">${t.pri&&!t.done?'<span class="hi">!</span> ':''}${esc(t.title)}</div>${chips.length?`<div class="tm">${chips.join('')}</div>`:''}</div>${t.due&&!t.done?`<a class="cal" href="${esc(calUrl(t))}" target="_blank" rel="noopener" title="Add to Google Calendar">📅</a>`:''}<button class="x" data-d="${esc(t.id)}" title="Delete">✕</button></div>`};
+ const grp=(label,list,cls)=>list.length?`<div class="card"><h2 class="${cls||''}">${label} <span class="mut" style="font-weight:500">${list.length}</span></h2>${list.sort(srt).map(row).join('')}</div>`:'';
+ const sug=suggestions(),shown=sug.slice(0,5);
+ $('#main').innerHTML=`<div class="grid" style="max-width:760px;margin:0 auto">
+ <div class="card"><div class="add"><input id="tIn" placeholder="Add a task…  e.g. “Call Ramesh tomorrow !”  or  “File GSTR-3B 20 oct”" autocomplete="off"><button class="btn sec" id="tClip" title="Attach screenshot / PDF (or paste with Ctrl+V)">📎</button><input type="file" id="tFile" accept="image/*,application/pdf" multiple hidden><button class="btn" id="tAdd">Add</button></div><div class="tm" id="tDA" style="margin-top:6px"></div>
+  <div class="hint" id="tHint">Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it's picked up automatically. Paste a screenshot with Ctrl+V to attach it.</div><div style="margin-top:8px"><button class="btn sm" id="tG">📅 Connect Google Calendar</button> <button class="btn sec sm" id="tIcs">📅 Export .ics</button></div></div>
+ ${sug.length?`<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:6px"><h2 style="margin:0">Suggested follow-ups <span class="mut" style="font-weight:500">${sug.length}</span></h2><button class="btn sec sm" id="sAll">Add all</button></div>
+  <div class="hint" style="margin:0 0 6px">Unpaid invoices that are overdue or 30+ days old and have no open task.</div>
+  ${shown.map(i=>`<div class="sug"><div class="tt">${esc(client(i.clientId).name)} <span class="mut">· ${esc(i.no)} · ${inr(remaining(i))}${overdueDays(i)?` · ${overdueDays(i)}d overdue`:''}</span></div><button class="btn sec sm" data-s="${esc(i.id)}">+ Task</button></div>`).join('')}
+  ${sug.length>shown.length?`<div class="hint">+ ${sug.length-shown.length} more — “Add all” creates a task for each.</div>`:''}</div>`:''}
+ ${grp('Overdue',open.filter(t=>t.due&&t.due<T),'bad')}${grp('Today',open.filter(t=>t.due===T))}${grp('Upcoming',open.filter(t=>t.due>T))}${grp('Anytime',open.filter(t=>!t.due))}
+ ${!open.length?'<div class="card empty" style="text-align:center">All clear ✓ — nothing to do.</div>':''}
+ ${done.length?`<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Completed <span class="mut" style="font-weight:500">${done.length}</span></h2><span><button class="btn sec sm" id="dTog">${lsGet('todo-done')==='1'?'Hide':'Show'}</button> <button class="btn dng sm" id="dClr">Clear</button></span></div>${lsGet('todo-done')==='1'?done.slice(0,50).map(row).join(''):''}</div>`:''}
+ </div>`;
+ const inp=$('#tIn'),hint=$('#tHint');
+ const add=()=>{const r=inp.value.trim();if(!r)return;const p=parseTask(r);S.todos.push(newTodo({...p,id:tdraft.id,attachments:tdraft.atts}));tdraft={id:uid(),atts:[]};save();render();$('#tIn').focus()};
+ inp.oninput=()=>{const r=inp.value.trim();if(!r){hint.textContent='Type a date (today, tomorrow, fri, 20 oct, in 3 days) and ! for high priority — it\'s picked up automatically.';return}
+  const p=parseTask(r);hint.textContent=`→ “${p.title}”${p.due?' · due '+dueLabel(p.due)+(p.time?' '+fmtTime(p.time):''):' · no date'}${p.pri?' · high priority':''}${p.invite?' · invite '+p.invite:''}`};
+ inp.onkeydown=e=>{if(e.key==='Enter')add()};$('#tAdd').onclick=add;
+ const drawDraft=()=>{$('#tDA').innerHTML=tdraft.atts.map(a=>`<span class="chip inv">📎 ${esc(a.name)} <span data-xd="${esc(a.id)}" style="cursor:pointer;margin-left:4px">✕</span></span>`).join('');
+  document.querySelectorAll('[data-xd]').forEach(x=>x.onclick=()=>{const k=tdraft.atts.findIndex(a=>a.id===x.dataset.xd);removeProofs([tdraft.atts[k].path]);tdraft.atts.splice(k,1);drawDraft()})};
+ drawDraft();pasteTarget=files=>attachFiles(files,tdraft.id,tdraft.atts,drawDraft);
+ $('#tClip').onclick=()=>$('#tFile').click();$('#tFile').onchange=e=>{attachFiles([...e.target.files],tdraft.id,tdraft.atts,drawDraft);e.target.value=''};
+ document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.c);const row=b.closest('.todo');row.classList.toggle('done');
+  setTimeout(()=>{t.done=!t.done;t.auto=false;t.doneAt=t.done?new Date().toISOString():'';save();render()},260)});
+ document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>{const t=S.todos.find(x=>x.id===b.dataset.d);gForget(t);removeProofs((t.attachments||[]).map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==b.dataset.d);save();render()});
+ document.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>todoForm(b.dataset.e));
+ $('#tIcs').onclick=exportIcs;$('#tG').onclick=gClick;
+ document.querySelectorAll('[data-at]').forEach(b=>b.onclick=e=>{e.stopPropagation();viewAtts(b.dataset.at)});
+ document.querySelectorAll('[data-iv]').forEach(b=>b.onclick=e=>{e.stopPropagation();openInvoice(b.dataset.iv)});
+ document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{S.todos.push(sugTodo(S.invoices.find(i=>i.id===b.dataset.s)));save();render()});
+ const sa=$('#sAll');if(sa)sa.onclick=()=>{if(sug.length>10&&!confirm(`Create ${sug.length} follow-up tasks?`))return;sug.forEach(i=>S.todos.push(sugTodo(i)));save();render()};
+ const dt=$('#dTog');if(dt)dt.onclick=()=>{lsSet('todo-done',lsGet('todo-done')==='1'?'0':'1');render()};
+ const dc=$('#dClr');if(dc)dc.onclick=()=>{if(confirm('Delete all completed tasks?')){S.todos.filter(t=>t.done).forEach(t=>{gForget(t);removeProofs((t.attachments||[]).map(a=>a.path))});S.todos=S.todos.filter(t=>!t.done);save();render()}};
+}
+/* attachments on tasks: stored in the private "proofs" bucket under todo-<id>/ */
+let tdraft={id:uid(),atts:[]},editTodoId=null,pasteTarget=null;
+async function attachFiles(files,tid,list,after){
+ for(const f of files){
+  if(!(f.type.startsWith('image/')||f.type==='application/pdf')){alert('Only images and PDFs can be attached: '+f.name);continue}
+  try{setStat('Uploading…');const aid=uid(),r=await uploadProof(f,'todo-'+tid,aid);
+   list.push({id:aid,name:(f.name&&!/^image\.(png|jpe?g)$/i.test(f.name))?f.name:'Screenshot '+new Date().toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}),path:r.path})}
+  catch(e){alert('Upload failed: '+(e.message||e))}}
+ setStat('Saved to cloud');after()}
+document.addEventListener('paste',e=>{const files=[...(e.clipboardData?.files||[])].filter(f=>f.type.startsWith('image/')||f.type==='application/pdf');if(!files.length)return;
+ if(dlg.open&&editTodoId){e.preventDefault();const t=S.todos.find(x=>x.id===editTodoId);t.attachments=t.attachments||[];attachFiles(files,t.id,t.attachments,()=>{save();todoAtt&&todoAtt()})}
+ else if(!dlg.open&&TAB==='todos'&&pasteTarget){e.preventDefault();pasteTarget(files)}});
+dlg.addEventListener('close',()=>{editTodoId=null;todoAtt=null});
+let todoAtt=null;
+async function viewAtts(tid,only){
+ const t=S.todos.find(x=>x.id===tid);if(!t)return;editTodoId=null;todoAtt=null;const list=(t.attachments||[]).filter(a=>!only||a.id===only);
+ const urls=await Promise.all(list.map(a=>sb.storage.from(BUCKET).createSignedUrl(a.path,600)));
+ show('Attachments — '+t.title,(only?'<button class="btn sec sm" id="aBk" style="margin-bottom:10px">← Back to task</button>':'')+list.map((a,k)=>{const u=urls[k].data?.signedUrl;if(!u)return `<p class="mut">${esc(a.name)}: could not load</p>`;
+  return a.path.endsWith('.pdf')?`<p><a class="lnk" href="${esc(u)}" target="_blank" rel="noopener">📄 ${esc(a.name)} (open PDF)</a></p>`:`<p class="mut sm" style="margin:0 0 4px">${esc(a.name)}</p><img src="${esc(u)}" style="max-width:100%;border-radius:10px;margin-bottom:14px">`}).join(''));
+ const bk=$('#aBk');if(bk)bk.onclick=()=>todoForm(tid)}
+function todoForm(id){const t=S.todos.find(x=>x.id===id);if(!t)return;t.attachments=t.attachments||[];editTodoId=id;
+ show('Edit task',`<div class="f"><div class="full"><label>Task</label><input id="tT" value="${esc(t.title)}"></div>
+ <div><label>Due date</label><input type="date" id="tD" value="${esc(t.due||'')}"></div>
+ <div><label>Time (optional)</label><input type="time" id="tM" value="${esc(t.time||'')}"></div>
+ <div><label>Priority</label><select id="tP"><option value="0">Normal</option><option value="1" ${t.pri?'selected':''}>High</option></select></div>
+ <div class="full"><label>Linked invoice (optional)</label><select id="tI">${opts(S.invoices.slice().sort((a,b)=>b.no.localeCompare(a.no)).map(i=>[i.id,`${i.no} · ${client(i.clientId).name} · ${inr(remaining(i))} due`]),t.invoiceId,'None')}</select></div>
+ <div class="full"><label>Also add to another Google Calendar (email)</label><input type="email" id="tInv" list="invList" placeholder="name@gmail.com" value="${esc(t.invite||'')}"><datalist id="invList">${[...new Set(S.todos.map(x=>x.invite).filter(Boolean))].map(e=>`<option value="${esc(e)}">`).join('')}</datalist>
+  <div class="hint">That address receives a calendar invitation by email and the event appears in their calendar. Needs Google Calendar connected. Invoice and client details are not included.</div></div>
+ <div class="full"><label>Attachments — screenshots or PDFs (you can also paste with Ctrl+V)</label><div id="tA"></div><input type="file" id="tF" accept="image/*,application/pdf" multiple></div></div>
+ <div class="row" style="margin-top:14px"><button class="btn" id="tS">Save</button><button class="btn sec" id="tCal" type="button">📅 Add to Google Calendar</button><button class="btn dng" id="tX">Delete task</button></div>`);
+ editTodoId=id;
+ todoAtt=()=>{$('#tA').innerHTML=t.attachments.length?t.attachments.map(a=>`<div class="row" style="margin-bottom:6px"><a class="lnk" data-av="${esc(a.id)}">📎 ${esc(a.name)}</a><span class="sp"></span><button class="btn dng sm" data-ar="${esc(a.id)}" type="button">Remove</button></div>`).join(''):'<div class="hint" style="margin:0 0 6px">No attachments yet.</div>';
+  document.querySelectorAll('[data-av]').forEach(a=>a.onclick=()=>viewAtts(id,a.dataset.av));
+  document.querySelectorAll('[data-ar]').forEach(b=>b.onclick=()=>{const k=t.attachments.findIndex(x=>x.id===b.dataset.ar);removeProofs([t.attachments[k].path]);t.attachments.splice(k,1);save();todoAtt()})};
+ todoAtt();
+ $('#tF').onchange=e=>{attachFiles([...e.target.files],t.id,t.attachments,()=>{save();todoAtt&&todoAtt()});e.target.value=''};
+ $('#tCal').onclick=()=>{const d=$('#tD').value;if(!d)return alert('Set a due date first, then add it to your calendar.');window.open(calUrl({...t,title:$('#tT').value.trim()||t.title,due:d,pri:+$('#tP').value,invite:$('#tInv').value.trim()}),'_blank','noopener')};
+ $('#tS').onclick=()=>{const v=$('#tT').value.trim();if(!v)return alert('Task cannot be empty');const inv=$('#tInv').value.trim().toLowerCase();if(inv&&!okEmail(inv))return alert('Enter a valid email for the invitation, or leave it empty.');Object.assign(t,{invite:inv,title:v,due:$('#tD').value,time:$('#tM').value,pri:+$('#tP').value,invoiceId:$('#tI').value});save();dlg.close();render()};
+ $('#tX').onclick=()=>{if(!confirm('Delete this task'+(t.attachments.length?' and its attachments':'')+'?'))return;gForget(t);removeProofs(t.attachments.map(a=>a.path));S.todos=S.todos.filter(x=>x.id!==id);save();dlg.close();render()}}
+
+/* ---------- export / import / auth ---------- */
+$('#bExport').onclick=()=>{if(!confirm('This file contains all client names, contacts and amounts in plain text. Keep it somewhere safe. Download it now?'))return;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download=`billing-export-${TODAY()}.json`;a.click()};
+$('#bImport').onclick=()=>$('#fImport').click();
+$('#fImport').onchange=async e=>{const f=e.target.files[0];e.target.value='';if(!f)return;
+ try{
+  if(f.size>25e6)throw new Error('file is larger than 25 MB');
+  const d=JSON.parse(await f.text());
+  if(!d||typeof d!=='object'||!Array.isArray(d.invoices)||!Array.isArray(d.clients)||!Array.isArray(d.pricing))throw new Error('not a billing export');
+  if(d.invoices.length+d.clients.length+d.pricing.length+(Array.isArray(d.todos)?d.todos.length:0)>20000)throw new Error('too many records');
+  if(!confirm('Add these records to the cloud database? Records with the same ID are overwritten; nothing is deleted.'))return;
+  setStat('Importing…');
+  let skippedProofs=0;
+  for(const inv of d.invoices)for(const p of (Array.isArray(inv&&inv.payments)?inv.payments:[]))if(p&&p.proof&&typeof p.proof.data==='string'){ /* legacy local backup: move proof into cloud storage */
+   const m=/^data:(image\/(?:jpeg|png)|application\/pdf);base64,/.exec(p.proof.data);
+   if(!m||p.proof.data.length>14e6||!okId(inv.id)||!okId(p.id)){p.proof=null;skippedProofs++;continue}
+   let blob;try{const bin=atob(p.proof.data.slice(m[0].length));const bytes=new Uint8Array(bin.length);for(let k=0;k<bin.length;k++)bytes[k]=bin.charCodeAt(k);blob=new Blob([bytes],{type:m[1]})}catch(_){p.proof=null;skippedProofs++;continue}
+   p.proof=await uploadBlob(blob,m[1]==='application/pdf'?'application/pdf':'image/jpeg',sstr(p.proof.name,200),inv.id,p.id)}
+  d.invoices.forEach(i=>{if(i&&typeof i==='object')normInv(i)});
+  const clean=sanitizeState({clients:d.clients,pricing:d.pricing,invoices:d.invoices.filter(i=>i&&typeof i==='object'),todos:d.todos,gdel:[]});
+  clean.state.todos.forEach(x=>{if(!S.todos.some(y=>y.id===x.id))S.todos.push({...x,gcalId:'',gSig:''})});
+  TABLES.forEach(t=>clean.state[t].forEach(x=>{const k=S[t].findIndex(y=>y.id===x.id);k>=0?S[t][k]=x:S[t].push(x)}));
+  S.seq=Math.max(S.seq,Math.floor(num(d.seq))||1,...S.invoices.map(x=>(+x.no.replace(/\D/g,'')||0)+1));
+  await save();render();
+  alert('Import finished.'+(clean.dropped.length?'\n'+clean.dropped.length+' record(s) were skipped because their data was invalid.':'')+(skippedProofs?'\n'+skippedProofs+' attached proof(s) were skipped (unsupported format).':''))
+ }catch(err){alert('Import failed: '+(err&&err.message?err.message:'not a valid file'))}};
+$('#bNew').onclick=()=>invoiceForm();
+$('#bOut').onclick=()=>sb.auth.signOut();
+$('#bSec').onclick=secDialog;
+
+function tools(on){$('#tools').style.display=on?'flex':'none';$('#nav').style.display=on?'flex':'none';$('#tabbar').style.display=on?'':'none'}
+function showLogin(){signedIn=false;tools(false);
+ const key=cfg.turnstileSiteKey;let cap=null,wid=null;
+ $('#main').innerHTML=`<div class="card" style="max-width:380px;margin:60px auto"><h2>Sign in</h2>
+ <div class="f" style="grid-template-columns:1fr"><div><label>Email</label><input id="lE" type="email" autocomplete="username"></div>
+ <div><label>Password</label><input id="lP" type="password" autocomplete="current-password"></div></div>
+ ${key?'<div id="cf" style="margin-top:12px;min-height:65px"></div>':''}
+ <div class="row" style="margin-top:12px"><button class="btn" id="lB"${key?' disabled':''}>Sign in</button><span id="lM" class="sm" style="color:var(--bad)"></span></div></div>`;
+ if(key){let tries=0;const t=setInterval(()=>{
+   if(window.turnstile&&$('#cf')){clearInterval(t);wid=turnstile.render('#cf',{sitekey:key,theme:'auto',
+    callback:tok=>{cap=tok;$('#lB').disabled=false},'expired-callback':()=>{cap=null;$('#lB').disabled=true},'error-callback':()=>{cap=null;$('#lM').textContent='Security check failed to load. Reload the page.'}})}
+   else if(++tries>100){clearInterval(t);if($('#lM'))$('#lM').textContent='Security check could not load. Check your connection and reload.'}},100)}
+ const go=async()=>{if(key&&!cap)return;$('#lM').textContent='';$('#lB').disabled=true;
+  const{error}=await sb.auth.signInWithPassword({email:$('#lE').value.trim(),password:$('#lP').value,options:key?{captchaToken:cap}:undefined});
+  if(error){$('#lM').textContent=error.message;if(key&&window.turnstile){cap=null;turnstile.reset(wid)}else $('#lB').disabled=false}else enter()};
+ $('#lB').onclick=go;$('#lP').onkeydown=e=>{if(e.key==='Enter')go()}}
+function showMfa(){signedIn=false;tools(false);
+ $('#main').innerHTML=`<div class="card" style="max-width:380px;margin:60px auto"><h2>Two-step verification</h2>
+ <p class="mut" style="margin-top:0">Enter the 6-digit code from your authenticator app.</p>
+ <input id="mC" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="font-size:20px;letter-spacing:.3em;text-align:center">
+ <div class="row" style="margin-top:12px"><button class="btn" id="mB">Verify</button><button class="btn sec" id="mX">Cancel</button><span id="mM" class="sm" style="color:var(--bad)"></span></div></div>`;
+ const go=async()=>{$('#mM').textContent='';$('#mB').disabled=true;
+  const f=await sb.auth.mfa.listFactors(),fac=f.data&&(f.data.totp||[])[0];
+  if(!fac){$('#mM').textContent='No authenticator found for this account.';$('#mB').disabled=false;return}
+  const r=await sb.auth.mfa.challengeAndVerify({factorId:fac.id,code:$('#mC').value.replace(/\s/g,'')});
+  if(r.error){$('#mM').textContent=r.error.message;$('#mB').disabled=false}else enter()};
+ $('#mB').onclick=go;$('#mC').onkeydown=e=>{if(e.key==='Enter')go()};$('#mX').onclick=()=>sb.auth.signOut();$('#mC').focus()}
+async function enter(){
+ const{data}=await sb.auth.getSession();if(!data.session)return showLogin();
+ const a=await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+ if(a.data&&a.data.nextLevel==='aal2'&&a.data.currentLevel!=='aal2')return showMfa();
+ signedIn=true;lastActive=Date.now();tools(true);$('#who').textContent=data.session.user.email;$('#main').innerHTML='<div class="empty">Loading…</div>';
+ try{await load();render();showReminders()}catch(e){$('#main').innerHTML=`<div class="card"><b>Could not load data.</b><p class="mut">${esc(e.message||e)}</p><p class="sm mut">If this is a first run, make sure supabase/schema.sql has been run in your Supabase project.</p><button class="btn" id="retryBtn">Retry</button></div>`;$('#retryBtn').onclick=enter}}
+async function secDialog(){
+ const f=await sb.auth.mfa.listFactors();if(f.error)return alert('Could not read security settings: '+f.error.message);
+ const on=(f.data.totp||[])[0];
+ show('Security',`<h2 style="margin-top:0">Two-step verification</h2>`+(on
+  ?`<p>✓ <b>On</b> (authenticator app). You are asked for a 6-digit code every time you sign in.</p><button class="btn dng" id="mOff">Turn off</button>`
+  :`<p>Protect your account even if your password leaks: after the password, sign-in asks for a code from an authenticator app (Google Authenticator, Microsoft Authenticator, Authy…).</p><button class="btn" id="mOn">Set up authenticator app</button>`)+
+  `<div id="mBox" style="margin-top:14px"></div><hr style="border:0;border-top:.5px solid var(--line);margin:18px 0"><p class="sm mut" style="margin:0">You are signed out automatically after ${IDLE_MS/60000} minutes of inactivity.</p>`);
+ if(on)$('#mOff').onclick=async()=>{if(!confirm('Turn off two-step verification?'))return;const r=await sb.auth.mfa.unenroll({factorId:on.id});if(r.error)return alert(r.error.message);dlg.close();alert('Two-step verification is now off.')};
+ else $('#mOn').onclick=mfaEnroll}
+async function mfaEnroll(){
+ const all=await sb.auth.mfa.listFactors();for(const x of (all.data&&all.data.all)||[])if(x.status!=='verified')await sb.auth.mfa.unenroll({factorId:x.id});
+ const r=await sb.auth.mfa.enroll({factorType:'totp',friendlyName:'Authenticator '+new Date().toISOString().slice(0,10)});
+ if(r.error)return alert('Could not start setup: '+r.error.message);
+ const id=r.data.id,totp=r.data.totp;
+ $('#mBox').innerHTML=`<ol style="padding-left:20px;line-height:1.7;margin:0"><li>Open your authenticator app and scan this code:<div style="margin:8px 0"><img id="mQ" alt="QR code" style="width:180px;height:180px;background:#fff;padding:6px;border-radius:10px"></div><div class="sm mut">Can't scan? Type this key in the app: <code id="mS" style="word-break:break-all"></code></div></li>
+  <li style="margin-top:10px">Enter the 6-digit code the app shows:<input id="mC" inputmode="numeric" maxlength="6" autocomplete="one-time-code" style="margin-top:6px;max-width:200px"></li></ol><div class="row" style="margin-top:10px"><button class="btn" id="mV">Verify and turn on</button></div>`;
+ $('#mQ').src=totp.qr_code;$('#mS').textContent=totp.secret;
+ $('#mV').onclick=async()=>{const v=await sb.auth.mfa.challengeAndVerify({factorId:id,code:$('#mC').value.replace(/\s/g,'')});
+  if(v.error)return alert('That code did not work: '+v.error.message);dlg.close();alert('Two-step verification is ON. You will be asked for a code at your next sign-in.')}}
+async function boot(){
+ if(cfg.supabaseUrl&&!/YOUR_/.test(cfg.supabaseUrl)&&!window.supabase){$('#main').innerHTML='<div class="card" style="max-width:560px;margin:40px auto"><h2>You appear to be offline</h2><p>The app could not load its cloud library. Reconnect to the internet and reload.</p></div>';return}
+ if(!sb){$('#main').innerHTML='<div class="card" style="max-width:560px;margin:40px auto"><h2>Setup needed</h2><p>Open <code>config.js</code> and paste your Supabase project URL and anon key. See README.md for the 5-minute setup.</p></div>';return}
+ sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT'){
+   S={clients:[],pricing:[],invoices:[],todos:[],gdel:[],seq:1};snap={clients:{},pricing:{},invoices:{},seq:null};V={clients:{},pricing:{},invoices:{}};
+   G.tok=null;tdraft={id:uid(),atts:[]};if(dlg.open)dlg.close();showLogin()}});
+ ['pointerdown','keydown','touchstart','wheel'].forEach(ev=>addEventListener(ev,()=>{lastActive=Date.now()},{passive:true,capture:true}));
+ setInterval(()=>{if(signedIn&&Date.now()-lastActive>IDLE_MS)sb.auth.signOut()},30000);
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
+ enter()}
+/* ---------- theme (Dark on / off = Light). No saved choice -> follows the device. ---------- */
+const sysDark=()=>matchMedia('(prefers-color-scheme: dark)').matches;
+function applyTheme(){const t=lsGet('theme');if(t)document.documentElement.dataset.theme=t;else delete document.documentElement.dataset.theme;
+ $('#thm').checked=t?t==='dark':sysDark();
+ const m=document.querySelector('meta[name=theme-color]');if(m)m.content=getComputedStyle(document.body).backgroundColor}
+$('#thm').onchange=e=>{lsSet('theme',e.target.checked?'dark':'light');applyTheme()};
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(!lsGet('theme'))applyTheme()});
+applyTheme();
+/* ---------- PWA ---------- */
+if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol))navigator.serviceWorker.register('sw.js').catch(()=>{});
+if(location.hash==='#todos'||location.hash==='#invoices')TAB=location.hash.slice(1);
+boot();

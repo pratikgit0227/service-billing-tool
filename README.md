@@ -1,33 +1,48 @@
 # Service Billing Tool
 
-Client billing, invoice, pricing and payment-tracking tool. Static web app (`index.html`) backed by
-Supabase (Postgres + Auth + private file storage), so the same data shows up on every device.
+Client billing, invoice, pricing, party-ledger and to-do tool. Static web app backed by Supabase
+(Postgres + Auth + private file storage), installable as an app (PWA).
 
-## One-time setup (~5 minutes)
+Files: `index.html` (page + styles), `app.js` (all logic), `early.js` (theme + anti-framing),
+`config.js` (public settings), `sw.js` (offline shell), `vendor/supabase.js` (pinned library), `supabase/*.sql`.
 
-1. Create a free project at https://supabase.com (region: Mumbai / ap-south-1 is closest).
-2. **SQL Editor** -> New query -> paste `supabase/schema.sql` -> Run.
-3. **Authentication -> Sign In / Providers -> Email**: turn **off** "Allow new users to sign up".
-4. **Authentication -> Users -> Add user**: create your login (email + password, tick auto-confirm).
-   Add more users the same way if others need access; everyone sees the same data.
-5. **Project Settings -> API**: copy the Project URL and the `anon` / publishable key into `config.js`.
-6. Open `index.html` (or deploy, below) and sign in.
+## One-time setup
 
-## Deploy (so it opens from any device)
+1. Create a free Supabase project. **SQL Editor** -> run `supabase/schema.sql`, then `supabase/hardening.sql`.
+2. **Authentication**: turn **off** "Allow new users to sign up" and **off** "Allow anonymous sign-ins".
+   Add your user (Users -> Add user, auto-confirm). Turn **on** CAPTCHA protection (Turnstile) if you use it.
+3. Put the Project URL and anon key in `config.js`. The anon key is public by design (role `anon`).
+   Also update the Supabase host in the `Content-Security-Policy` tag at the top of `index.html` if the URL changes.
+4. Host the folder on any static host (GitHub Pages is configured).
+5. In the app, open **Security** and turn on two-step verification (authenticator app).
 
-Any static host works. Easiest: Cloudflare Pages, Netlify or Vercel, connected to this GitHub repo
-(works with a private repo, no build command, output directory = repo root). The repo and site may be
-public: data is protected by login and row-level security, not by hiding the page.
+## Security model (short)
+
+- Data is protected by sign-in + row-level security. `hardening.sql` limits access to an allow-list of e-mails
+  (`public.allowed_users`), blocks anonymous users, requires the 2-step code once it is enabled, records every change
+  in `public.audit_log`, and limits uploads to 10 MB JPEG/PDF.
+- The browser rebuilds all loaded data through a whitelist (`sanitizeState`) and escapes every value placed in HTML.
+- Saving is version-checked: if another device changed the same record first, the save is refused and the latest data
+  is reloaded (nothing is overwritten silently).
+- A strict Content-Security-Policy is set in `index.html`; the Supabase library is vendored (v2.117.2, sha384
+  `Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok`) instead of loaded from a CDN.
+- Signed-in sessions end after 30 minutes without activity.
+- Never commit exports, spreadsheets or keys (see `.gitignore`).
+
+## Updating the vendored library
+
+Download the exact version from two CDNs, confirm they are byte-identical, compare the sha384 above, replace
+`vendor/supabase.js`, update the version/hash here and bump `CACHE` in `sw.js`.
 
 ## Data
 
-- Clients, pricing, invoices and payments: Postgres tables (`clients`, `pricing`, `invoices`, `meta`).
-- Payment proofs: private Storage bucket `proofs`, opened via short-lived signed links.
-- Enable daily backups in Supabase (paid plan) or use **Export data** regularly (exports records; proof files stay in Storage).
-- **Import data** accepts exports from this version and the old local-only version (proofs are uploaded to Storage).
+- Clients, pricing, invoices and payments: Postgres tables `clients`, `pricing`, `invoices`, `meta`.
+- Payment proofs and task attachments: private bucket `proofs`, opened through short-lived signed links.
+- Free Supabase projects have no automatic backups: use **Export data** regularly (records only; proof files stay in Storage).
 
 ## Google Calendar sync
 
-To-do tasks sync to your primary Google Calendar from the browser (Google OAuth, token model).
+To-do tasks sync to your primary Google Calendar from the browser (Google OAuth token flow).
 Set `googleClientId` in `config.js` (Google Cloud -> Credentials -> OAuth client ID, type Web application,
 authorized JavaScript origin = the site URL). Then To-do -> "Connect Google Calendar".
+A task can also invite another e-mail address; invoice/client details are never put in calendar events that have guests.
