@@ -13,7 +13,8 @@ const SERVICES={
  'Sale of Property':{typeLabel:'Service Type',extra:[{k:'property',l:'Property / Transaction Details',kind:'textarea',req:1},{k:'txnDate',l:'Transaction Date',kind:'date'}]},
  'Accounting':{typeLabel:'Accounting Service Type',extra:[{k:'period',l:'Month / Period',kind:'month'},{k:'fy',l:'Financial Year',kind:'fy',req:1}]},
  'FSSAI':{typeLabel:'Service Type',extra:[{k:'licenseType',l:'License Type',kind:'select',opts:['','Basic Registration','State License','Central License']}]},
- 'Udyam Registration':{typeLabel:'Service Type',extra:[]}
+ 'Udyam Registration':{typeLabel:'Service Type',extra:[]},
+ 'Other':{typeLabel:'Description',extra:[{k:'note',l:'More details (optional)',kind:'textarea'}]}
 };
 const SEED_PRICES=[['ITR Filing','ITR-1'],['ITR Filing','ITR-2'],['ITR Filing','ITR-3'],['ITR Filing','ITR-4'],['ITR Filing','ITR-5'],
  ['GST Filing','GSTR-1'],['GST Filing','GSTR-3B'],['GST Filing','GSTR-9'],['GST Audit','GSTR-9C'],
@@ -36,7 +37,7 @@ const okId=x=>typeof x==='string'&&ID_RE.test(x);
 const cleanProof=p=>p&&typeof p==='object'&&PATH_RE.test(p.path)?{name:sstr(p.name,200),path:p.path}:null;
 function cleanDetails(svc,d){const o={};if(!d||typeof d!=='object')return o;
  SERVICES[svc].extra.forEach(f=>{const v=d[f.k];if(typeof v!=='string')return;
-  if((f.k==='fy'||f.k==='period')&&!/^\d{4}-\d{2}$/.test(v))return;if(f.k==='txnDate'&&!DATE_RE.test(v))return;o[f.k]=v.slice(0,f.k==='property'?1000:60)});return o}
+  if((f.k==='fy'||f.k==='period')&&!/^\d{4}-\d{2}$/.test(v))return;if(f.k==='txnDate'&&!DATE_RE.test(v))return;o[f.k]=v.slice(0,(f.k==='property'||f.k==='note')?1000:60)});return o}
 function sanitizeState(r){
  const dropped=[],arr=x=>Array.isArray(x)?x:[],clients=[],pricing=[],invoices=[],todos=[];
  arr(r.clients).forEach(c=>{if(!c||typeof c!=='object'||!okId(c.id)){dropped.push('client');return}
@@ -152,7 +153,7 @@ function normInv(i){if(!i.items){i.items=[{id:i.id+'-1',service:i.service,type:i
 const client=id=>S.clients.find(c=>c.id===id)||{name:'(deleted)'};
 const typesFor=svc=>S.pricing.filter(p=>p.service===svc).map(p=>p.type);
 const priceFor=(svc,type)=>(S.pricing.find(p=>p.service===svc&&p.type===type)||{}).price;
-function detailText(t){const d=t.details,out=[];if(d.period)out.push(fmtM(d.period));if(d.fy)out.push('FY '+d.fy);if(d.licenseType)out.push(d.licenseType);if(d.property)out.push(d.property);if(d.txnDate)out.push('Txn '+fmtD(d.txnDate));return out.join(' · ')}
+function detailText(t){const d=t.details,out=[];if(d.period)out.push(fmtM(d.period));if(d.fy)out.push('FY '+d.fy);if(d.licenseType)out.push(d.licenseType);if(d.property)out.push(d.property);if(d.txnDate)out.push('Txn '+fmtD(d.txnDate));if(d.note)out.push(d.note);return out.join(' · ')}
 const opts=(arr,sel,blank)=>(blank!==undefined?`<option value="">${esc(blank)}</option>`:'')+arr.map(o=>{const v=Array.isArray(o)?o[0]:o,l=Array.isArray(o)?o[1]:o;return `<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(l)}</option>`}).join('');
 
 /* ---------- filters ---------- */
@@ -233,7 +234,7 @@ function vClients(){
  document.querySelectorAll('[data-cf]').forEach(b=>b.onclick=()=>{Object.keys(F).forEach(k=>F[k]='');F.client=b.dataset.cf;TAB='invoices';render()});
 }
 function vPricing(){
- const groups=Object.keys(SERVICES).map(svc=>{const rows=S.pricing.filter(p=>p.service===svc);
+ const groups=Object.keys(SERVICES).filter(k=>k!=='Other').map(svc=>{const rows=S.pricing.filter(p=>p.service===svc);
   return `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">${svc}</h2><button class="btn sec sm" data-add="${esc(svc)}">+ Add ${esc(SERVICES[svc].typeLabel.toLowerCase())}</button></div>
   <table><tbody>${rows.map(p=>`<tr><td style="width:55%"><input data-pn="${esc(p.id)}" value="${esc(p.type)}"></td><td><input type="number" min="0" step="1" data-pp="${esc(p.id)}" value="${esc(p.price)}"></td><td><button class="btn dng sm" data-pd="${esc(p.id)}">✕</button></td></tr>`).join('')||'<tr><td class="mut">None yet.</td></tr>'}</tbody></table></div>`}).join('');
  $('#main').innerHTML=`<p class="mut" style="margin-top:0">Prices (₹) set here are auto-picked when creating an invoice. They can be overridden per invoice. Add your own sub-services (e.g. extra Tax Planning types) with the + button.</p><div class="grid two">${groups}</div>`;
@@ -274,10 +275,10 @@ function invoiceForm(id,preset){
  <div class="row" style="margin:4px 0 12px"><button class="btn sec sm" id="iAdd" type="button">+ Add another service</button><span class="sp"></span><b>Invoice total: <span id="iTot"></span></b></div>
  <div class="f"><div class="full"><label>Notes / remarks</label><textarea id="iN" rows="2">${esc(cur.notes)}</textarea></div></div>
  <div class="row" style="margin-top:14px"><button class="btn" id="iSave">${ex?'Save changes':'Create invoice'}</button></div>`);
- const hintFor=t=>{const p=priceFor(t.service,t.type);return p?`Pricing Master: ${inr(p)}${+t.amount!==p?' (overridden)':''}`:'No price set in Pricing Master — enter manually'};
+ const hintFor=t=>{const p=priceFor(t.service,t.type);return t.service==='Other'?'Enter the amount for this item':p?`Pricing Master: ${inr(p)}${+t.amount!==p?' (overridden)':''}`:'No price set in Pricing Master — enter manually'};
  const updTot=()=>{$('#iTot').textContent=inr(items.reduce((a,t)=>a+(+t.amount||0),0))};
- const itemHTML=(t,k)=>{const sv=SERVICES[t.service],ts=typesFor(t.service);
-  if(!ts.includes(t.type))t.type=ts[0]||'';
+ const itemHTML=(t,k)=>{const sv=SERVICES[t.service],ts=typesFor(t.service),isO=t.service==='Other';
+  if(!isO&&!ts.includes(t.type))t.type=ts[0]||'';
   const p=priceFor(t.service,t.type);if(!t.touched&&p!==undefined)t.amount=p||'';
   const extra=sv.extra.map(f=>{let v=t.details[f.k];if(v===undefined){v=f.k==='fy'&&f.req?fyOf(TODAY()):'';if(v)t.details[f.k]=v}v=v||'';
    const lb=`<label>${f.l}${f.req?' *':''}</label>`;
@@ -287,17 +288,18 @@ function invoiceForm(id,preset){
    return `<div>${lb}<input type="${f.kind}" data-x="${esc(f.k)}" value="${esc(v)}"></div>`}).join('');
   return `<div class="card" style="margin-bottom:10px" data-k="${esc(k)}"><div class="row" style="justify-content:space-between;margin-bottom:8px"><b>Service ${k+1}</b>${items.length>1?`<button class="btn dng sm" data-rm="${esc(k)}" type="button">Remove</button>`:''}</div><div class="f">
    <div><label>Type of service *</label><select data-s="service">${opts(Object.keys(SERVICES),t.service)}</select></div>
-   <div><label>${sv.typeLabel} *</label><select data-s="type">${opts(ts,t.type)}</select></div>
+   <div${isO?' class="full"':''}><label>${sv.typeLabel} *</label>${isO?`<input data-s="desc" maxlength="120" placeholder="e.g. Stamp duty advisory, Notice reply, Certification" value="${esc(t.type)}">`:`<select data-s="type">${opts(ts,t.type)}</select>`}</div>
    ${extra}
    <div><label>Amount (₹) *</label><input type="number" min="0" step="1" data-s="amount" value="${esc(t.amount)}"><div class="hint">${esc(hintFor(t))}</div></div></div></div>`};
  const draw=()=>{$('#iItems').innerHTML=items.map(itemHTML).join('');updTot()};
  const box=$('#iItems');
  box.onchange=e=>{const el=e.target,k=+el.closest('[data-k]').dataset.k,t=items[k];
-  if(el.dataset.s==='service'){t.service=el.value;t.type='';t.details={};t.touched=false;draw()}
+  if(el.dataset.s==='service'){t.service=el.value;t.type='';t.details={};t.amount='';t.touched=false;draw()}
   else if(el.dataset.s==='type'){t.type=el.value;t.touched=false;draw()}
   else if(el.dataset.x){t.details[el.dataset.x]=el.value.trim();
    if(el.dataset.x==='period'&&el.value&&SERVICES[t.service].extra.some(f=>f.k==='fy')){t.details.fy=fyFromMonth(el.value);draw()}}};
- box.oninput=e=>{const el=e.target;if(el.dataset.s!=='amount')return;const k=+el.closest('[data-k]').dataset.k,t=items[k];
+ box.oninput=e=>{const el=e.target,s=el.dataset.s;if(s!=='amount'&&s!=='desc')return;const k=+el.closest('[data-k]').dataset.k,t=items[k];
+  if(s==='desc'){t.type=el.value;return}
   t.amount=el.value;t.touched=true;el.nextElementSibling.textContent=hintFor(t);updTot()};
  box.onclick=e=>{const b=e.target.closest('[data-rm]');if(b){items.splice(+b.dataset.rm,1);draw()}};
  $('#iAdd').onclick=()=>{items.push(blank());draw()};
@@ -308,12 +310,12 @@ function invoiceForm(id,preset){
   let bad='';
   if(!$('#iC').value)bad='Client';if(!$('#iD').value)bad='Invoice date';if(!$('#iDue').value)bad='Due date';
   items.forEach((t,k)=>{const w='Service '+(k+1)+': ';
-   if(!t.type)bad=w+SERVICES[t.service].typeLabel+' (add one in Pricing Master)';
+   if(!String(t.type).trim())bad=w+(t.service==='Other'?'Description':SERVICES[t.service].typeLabel+' (add one in Pricing Master)');
    SERVICES[t.service].extra.forEach(f=>{if(f.req&&!t.details[f.k])bad=w+f.l});
    if(t.service==='GST Filing'&&['GSTR-1','GSTR-3B'].includes(t.type)&&!t.details.period)bad=w+'Month / Return Period';
    if(t.amount===''||!(+t.amount>=0))bad=w+'Amount'});
   if(bad)return alert('Please fill: '+bad);
-  const list=items.map(({touched,...t})=>({...t,amount:+t.amount}));
+  const list=items.map(({touched,...t})=>({...t,type:String(t.type).trim().slice(0,120),amount:+t.amount}));
   const data={clientId:$('#iC').value,invoiceDate:$('#iD').value,dueDate:$('#iDue').value,items:list,amount:list.reduce((a,t)=>a+t.amount,0),notes:$('#iN').value};
   if(ex){Object.assign(ex,data);save();dlg.close();render();openInvoice(ex.id)}
   else{S.seq=Math.max(S.seq,...S.invoices.map(x=>(+x.no.replace(/\D/g,'')||0)+1));const inv={id:uid(),no:'INV-'+String(S.seq++).padStart(4,'0'),payments:[],createdAt:TODAY(),...data};S.invoices.push(inv);save();dlg.close();render();openInvoice(inv.id)}
